@@ -47,3 +47,6 @@ backend/**/appsettings.*.local.json
 backend/**/secrets.json
 .env
 .env.*
+
+# Local editor and run settings
+.claude/

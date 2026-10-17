@@ -111,8 +111,24 @@ public static class InvoiceEndpoints
 
         MapAction(invoices, "approve", (b, o, id) => b.Approve(o, id, DateTime.UtcNow));
         MapAction(invoices, "reject", (b, o, id) => b.Reject(o, id, DateTime.UtcNow));
-        MapAction(invoices, "pay", (b, o, id) => b.MarkPaid(o, id, DateTime.UtcNow));
-        MapAction(invoices, "unpay", (b, o, id) => b.MarkUnpaid(o, id, DateTime.UtcNow));
+        // Paying (or un-paying) also records (or removes) the payment in the account history,
+        // so the balance, payday plan and reports agree with the invoice
+        foreach (var (action, paid) in new[] { ("pay", true), ("unpay", false) })
+        {
+            invoices.MapPost($"/{{id}}/{action}", async (string id, ClaimsPrincipal user, IInvoiceStore store, Omabilo.Api.Finance.IFinanceStore finance, TimeProvider clock, CancellationToken ct) =>
+            {
+                var owner = user.OwnerId();
+                var now = clock.GetUtcNow().UtcDateTime;
+                var result = await Guarded(() => store.UpdateAsync(owner, b => paid ? b.MarkPaid(owner, id, now) : b.MarkUnpaid(owner, id, now), ct));
+
+                if (result is Microsoft.AspNetCore.Http.HttpResults.Ok<CanonicalInvoice> ok)
+                {
+                    await FinanceEndpoints.SyncInvoicePaymentAsync(finance, owner, ok.Value!, now.Date, ct);
+                }
+
+                return result;
+            });
+        }
         MapAction(invoices, "keep-separate", (b, o, id) => b.KeepSeparate(o, id, DateTime.UtcNow));
 
         invoices.MapPost("/{id}/merge", async (string id, MergeInput input, ClaimsPrincipal user, IInvoiceStore store, CancellationToken ct) =>

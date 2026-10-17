@@ -1,0 +1,14 @@
+# Keep local build output, databases, settings and dependencies out of the image
+**/bin
+**/obj
+**/App_Data
+**/*.db
+**/.env*
+**/node_modules
+**/appsettings.*.local.json
+.git
+build
+docs
+web
+frontend-node
+scripts

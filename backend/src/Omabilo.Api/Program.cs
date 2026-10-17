@@ -3,13 +3,14 @@
 // IKON service       → replacement here
 // sign-in (IKON auth) → Development: fictional "demo-…" users via the X-Demo-User header
 //                       Anything else: JWT bearer tokens from an identity provider you configure
-// persistent state    → IInvoiceStore: InMemory (tests) or a local SQLite file (development)
+// persistent state    → IInvoiceStore + IFinanceStore: InMemory (tests) or a local SQLite file (development)
 // UI streaming        → none: this is a JSON API for a future frontend
 
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Omabilo.Api.Auth;
 using Omabilo.Api.Endpoints;
+using Omabilo.Api.Finance;
 using Omabilo.Api.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,6 +19,7 @@ var env = builder.Environment;
 
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddProblemDetails();
+builder.Services.AddSingleton(TimeProvider.System);
 
 // ── Storage ─────────────────────────────────────────────────────────────────
 var storage = config["Storage:Provider"] ?? "InMemory";
@@ -26,10 +28,12 @@ if (storage.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
 {
     var path = config["Storage:SqlitePath"] ?? Path.Combine("App_Data", "omabilo-dev.db");
     builder.Services.AddSingleton<IInvoiceStore>(_ => new SqliteInvoiceStore(path));
+    builder.Services.AddSingleton<IFinanceStore>(sp => new SqliteFinanceStore(path, sp.GetRequiredService<TimeProvider>()));
 }
 else if (storage.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddSingleton<IInvoiceStore, InMemoryInvoiceStore>();
+    builder.Services.AddSingleton<IFinanceStore, InMemoryFinanceStore>();
 }
 else
 {
@@ -100,6 +104,7 @@ app.UseAuthorization();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", storage, auth = authMode.Length > 0 ? authMode : "Jwt" })).AllowAnonymous();
 app.MapInvoiceEndpoints();
 app.MapDemoEndpoints();
+app.MapFinanceEndpoints();
 
 app.Run();
 
