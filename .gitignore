@@ -36,3 +36,14 @@ public/favicon-512.png
 public/favicon.ico
 public/maskable-512.png
 # END ikon-assets
+
+# Standalone backend: local databases and private settings never go into git
+backend/**/App_Data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+backend/**/appsettings.*.local.json
+backend/**/secrets.json
+.env
+.env.*

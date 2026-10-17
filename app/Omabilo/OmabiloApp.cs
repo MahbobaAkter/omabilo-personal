@@ -36,6 +36,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
     [
         new("dashboard", "Dashboard", "layout-dashboard"),
         new("inbox", "Financial Inbox", "inbox"),
+        new("invoices", "Invoices", "file-text"),
         new("debts", "Debt Tracker", "trending-down"),
         new("payday", "Payday Planner", "calendar-clock"),
         new("goals", "Savings & Goals", "piggy-bank"),
@@ -95,6 +96,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                             switch (_section.Value)
                             {
                                 case "inbox": view.Feature("inbox", content: RenderInbox); break;
+                                case "invoices": view.Feature("invoices", content: RenderInvoices); break;
                                 case "debts": view.Feature("debts", content: RenderDebts); break;
                                 case "payday": view.Feature("payday", content: RenderPayday); break;
                                 case "goals": view.Feature("goals", content: RenderGoals); break;
@@ -139,7 +141,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                 foreach (var s in Sections)
                 {
                     var active = _section.Value == s.Key;
-                    var count = s.Key == "inbox" ? AttentionCount() : 0;
+                    var count = s.Key switch { "inbox" => AttentionCount(), "invoices" => InvoicesToReview(), _ => 0 };
 
                     view.Button([NavItem.Md, active ? NavItem.ActiveBrand : NavItem.Default, "h-11 rounded-xl"], key: s.Key,
                         onClick: () => Go(s.Key),
@@ -228,6 +230,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                 var shortLabel = s.Label.Split(' ')[^1] switch
                 {
                     "Inbox" => "Inbox",
+                    "Invoices" => "Invoices",
                     "Tracker" => "Debts",
                     "Planner" => "Payday",
                     "Goals" => "Goals",
@@ -243,7 +246,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                         {
                             b.Icon([Icon.Sm], name: s.IconName);
 
-                            if (s.Key == "inbox" && AttentionCount() > 0)
+                            if ((s.Key == "inbox" && AttentionCount() > 0) || (s.Key == "invoices" && InvoicesToReview() > 0))
                             {
                                 b.Box(["absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-error-solid"]);
                             }

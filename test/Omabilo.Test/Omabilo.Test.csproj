@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Unit tests for the plain-C# invoice domain. The files are compiled in directly, so the
+       tests need neither the IKON runtime nor network access to any provider. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\app\Omabilo\Invoices\InvoiceModel.cs" Link="Domain\InvoiceModel.cs" />
+    <Compile Include="..\..\app\Omabilo\Invoices\InvoiceBook.cs" Link="Domain\InvoiceBook.cs" />
+    <Compile Include="..\..\app\Omabilo\Invoices\InvoiceSources.cs" Link="Domain\InvoiceSources.cs" />
+    <Compile Include="..\..\app\Omabilo\Invoices\SyntheticInvoices.cs" Link="Domain\SyntheticInvoices.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+</Project>

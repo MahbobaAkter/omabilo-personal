@@ -44,7 +44,24 @@ public partial class OmabiloApp
     private void SetInboxStatus(InboxItem item, InboxStatus status, string message, DateTime? snoozeUntil = null)
     {
         _inbox.ReplaceWhere(i => i.Id == item.Id, i => i with { Status = status, SnoozedUntil = snoozeUntil });
-        OfferUndo($"{message}: {item.Title}", () => _inbox.ReplaceWhere(i => i.Id == item.Id, _ => item));
+
+        // Moving a paid bill back (or finishing one) keeps a linked invoice's payment status in step
+        var paidChanged = (item.Status == InboxStatus.Done) != (status == InboxStatus.Done);
+
+        if (paidChanged && item.Kind == InboxKind.Bill)
+        {
+            SyncInvoiceFromBill(item.Id, paid: status == InboxStatus.Done);
+        }
+
+        OfferUndo($"{message}: {item.Title}", () =>
+        {
+            _inbox.ReplaceWhere(i => i.Id == item.Id, _ => item);
+
+            if (paidChanged && item.Kind == InboxKind.Bill)
+            {
+                SyncInvoiceFromBill(item.Id, paid: item.Status == InboxStatus.Done);
+            }
+        });
     }
 
     private bool InFilter(InboxItem i, string filter) => filter switch
