@@ -52,6 +52,8 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
     - local PDF text with PdfPig (no OCR)
     - duplicate and reminder merging; payment confirmations mark bills paid
   - **Planning:** deterministic cash flow until payday (Finnish weekend paydays move to Friday), with each line labelled You entered, From email or Estimate. Suggestions explain why they were made.
+  - **Month by month** (`Companion/MonthlySummary.cs`): six months of bills due, bills marked paid, receipts, refunds, payslip net pay and pay reported received, plus a salary history. Duplicates and "not for me" records never count; a payslip is never counted as money received.
+  - **Health:** `GET /api/health` (public, no personal data) reports the database, which secrets are configured (yes/no only), the exact Google redirect URI this server uses, the scope, and the scheduled sync's last run. That run is recorded per server address in `om_job_runs`, so a local run never passes for the live scheduler.
   - **AI:** opt-in only, EU-pinned Claude Haiku with redacted input. Output is validated; facts with unsupported numbers are dropped. If AI fails, the rule-based result stays.
   - **Controls:** correct, review, report paid, dispute, delete, re-read, export, delete all data, delete account (platform), and the `UserErased` handler.
   - **Storage:** Postgres tables `om_*` in the app's built-in database, every query scoped by user id.
@@ -61,7 +63,7 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
 
 **Real automated tests (17 Oct 2026, current code):**
 - `dotnet test backend/Omabilo.Backend.slnx`: **53/53 passed**. This includes 10 proxy tests run against a *simulated* proxy in the in-memory test server.
-- `dotnet test test/Omabilo.Test`: **114/114 passed**. This includes the companion: OAuth flow, sync, retries, isolation, AI fallback, PDF reading and cash flow, all run against a *fake* Google.
+- `dotnet test test/Omabilo.Test`: **117/117 passed** (17 Oct 2026, after the monthly summary and health check). This includes the companion: OAuth flow, sync, retries, isolation, AI fallback, PDF reading and cash flow, all run against a *fake* Google.
 - `npm --prefix web test`: **20/20 passed**. `npm run build` (type check + build): OK. `npm audit`: 0 vulnerabilities.
 - IKON app build: 0 warnings, 0 errors.
 
@@ -80,23 +82,20 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
 - a real `docker build`, or a deployment of the standalone `backend/` + `web/`
 - **real Google OAuth and real Gmail:** no OAuth client exists yet
 - a **real AI call:** AI is only tested with a fake model
+- **the live scheduler:** `ikon cron list --app-id 6ad2bf16644b301473e4962c` says "no active deployment" while `ikon deployment list` shows `f797189` active. After the next deploy, `/api/health` → `scheduledSync.lastRunUtc` shows whether the platform really fires the job.
+- **a published privacy policy:** `/legal/privacy` currently serves the app shell, not a policy. `PRIVACY_DRAFT.md` needs the owner's details before it can become `legal/privacy.md`.
 - OCR for scanned PDFs (not implemented)
 - screen-reader testing
 
 ## Git
 
-- **Branch:** `main` at `cafa063` (IKON app polish: plain-language dashboard, payday breakdown, Smart Spend Guard), in step with IKON.
-- **IKON (`origin`):** `cafa063`, saved with `ikon save` and **deployed** on 17 Oct 2026. The live app works for signed-out visitors, who get fresh fictional demo data.
+- **Branch:** `main` at `f797189` (connected companion), saved to IKON and **deployed** on 17 Oct 2026. The monthly summary and `/api/health` are newer and not yet committed or deployed.
 - **GitHub (`github`):** `e624604` (pushed 17 Oct 2026), a noreply snapshot of `main` at `978817d` plus the then-uncommitted proxy fix, tests and docs. The local branch `github-main` tracks it.
 - **Recent local commits:**
   - `1157de4`: standalone API
   - `eca76bf`: website + finance API
   - `978817d`: label tests + deploy notes
-- **Uncommitted (keep):**
-  - the proxy fix: `backend/src/Omabilo.Api/Program.cs`, `appsettings.json`, new `backend/tests/Omabilo.Api.Tests/ProxyTests.cs`
-  - new web tests in `web/src/api/client.test.ts` and `web/src/config.test.ts`
-  - doc updates in `DECISIONS.md`, `DEPLOYMENT.md` and this file
-  - `frontend-node/package-lock.json`: npm churn, deliberately never committed
+- **Uncommitted:** the monthly summary, `/api/health`, their tests and these doc updates. `frontend-node/package-lock.json` churn is deliberately never committed.
 - **Publishing rules** (`DECISIONS.md`):
   - GitHub gets parentless or fast-forward **noreply snapshots** built on `github-main`, so the personal emails in local commits are never published.
   - Never push `main` to `github`, and never force-push.
@@ -128,5 +127,6 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
 
 ## Single best next action
 
-Commit the uncommitted proxy fix and its tests locally (leaving out `frontend-node/package-lock.json`),
-so the verified work is safe in Git. Then decide the identity provider and the Postgres host.
+Create the Google OAuth client and set its two IKON secrets (`DEPLOYMENT.md`, "Connected companion on
+IKON"). Then deploy, check `https://omabilo-2143f1e7.ikonai.app/api/health` shows
+`googleOAuthConfigured: true`, and connect the dedicated test inbox.

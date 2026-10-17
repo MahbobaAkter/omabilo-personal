@@ -119,19 +119,116 @@ public partial class OmabiloApp
     [Cron("*/15 * * * *")]
     public async Task SyncConnectedGmailAccounts(CancellationToken ct)
     {
-        if (Engine.MissingConfiguration().Count > 0)
+        // Recorded before anything else, so /api/health can prove the scheduler really fires
+        await RecordJobRunAsync(SyncJobKey, "started", ct);
+
+        var missing = Engine.MissingConfiguration();
+
+        if (missing.Count > 0)
         {
+            await RecordJobRunAsync(SyncJobKey, "skipped: Gmail is not configured on this server", ct);
             return;
         }
 
         await using var hold = await app.BackgroundWork.StartAsync(TimeSpan.FromMinutes(14), "scheduled Gmail sync");
-        var count = await Engine.SyncDueAsync(25, ct);
 
-        if (count > 0)
+        try
         {
-            Log.Instance.Info($"scheduled gmail sync: {count} connection(s) synced");
+            var count = await Engine.SyncDueAsync(25, ct);
+            await RecordJobRunAsync(SyncJobKey, $"ok: {count} connection(s) synced", ct);
+
+            if (count > 0)
+            {
+                Log.Instance.Info($"scheduled gmail sync: {count} connection(s) synced");
+            }
+        }
+        catch (Exception ex)
+        {
+            await RecordJobRunAsync(SyncJobKey, $"failed: {ex.GetType().Name}", ct);
+            throw;
         }
     }
+
+    // ── Health: what an operator needs to know, and nothing about any person ──
+
+    [HttpGet("/health", Auth = EndpointAuth.Public)]
+    public async Task<HttpResult> Health(CancellationToken ct)
+    {
+        var database = "ok";
+        DateTime? lastJobUtc = null;
+        string? lastJobResult = null;
+
+        try
+        {
+            await using var conn = await app.DatabaseAsync();
+            await conn.OpenAsync(ct);
+            await EnsureJobTableAsync(conn, ct);
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "select last_run_utc, last_result from om_job_runs where job = @job";
+            AddParam(cmd, "job", SyncJobKey);
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+
+            if (await r.ReadAsync(ct))
+            {
+                lastJobUtc = DateTime.SpecifyKind(r.GetDateTime(0), DateTimeKind.Utc);
+                lastJobResult = r.GetString(1);
+            }
+        }
+        catch (Exception ex)
+        {
+            database = $"error: {ex.GetType().Name}";
+        }
+
+        var missing = Engine.MissingConfiguration();
+        var body = new
+        {
+            status = database == "ok" ? "ok" : "degraded",
+            database,
+            tokenKeyConfigured = TokenProtector.FromBase64(SecretOrNull("OMABILO_TOKEN_KEY")) != null,
+            googleOAuthConfigured = GoogleConfig() != null,
+            missingConfiguration = missing,
+            googleRedirectUri = GoogleRedirectUri,
+            gmailScope = GoogleScopes.GmailReadOnly,
+            scheduledSync = new { schedule = "every 15 minutes (UTC)", lastRunUtc = lastJobUtc, lastResult = lastJobResult },
+            checkedUtc = DateTime.UtcNow,
+        };
+
+        return HttpResult.Json(body, database == "ok" ? 200 : 503);
+    }
+
+    // Keyed by server address: a local run shares the live database, and its runs must not pass for the live scheduler's
+    private string SyncJobKey => $"gmail-sync@{new Uri(app.PublicUrl).Authority}";
+
+    private static async Task EnsureJobTableAsync(System.Data.Common.DbConnection conn, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "create table if not exists om_job_runs (job text primary key, last_run_utc timestamptz not null, last_result text not null)";
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private async Task RecordJobRunAsync(string job, string result, CancellationToken ct)
+    {
+        try
+        {
+            await using var conn = await app.DatabaseAsync();
+            await conn.OpenAsync(ct);
+            await EnsureJobTableAsync(conn, ct);
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                insert into om_job_runs (job, last_run_utc, last_result) values (@job, @at, @result)
+                on conflict (job) do update set last_run_utc = excluded.last_run_utc, last_result = excluded.last_result
+                """;
+            AddParam(cmd, "job", job);
+            AddParam(cmd, "at", DateTime.UtcNow);
+            AddParam(cmd, "result", result);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            Log.Instance.Warning($"job heartbeat failed: {ex.GetType().Name}");
+        }
+    }
+
 
     // ── Account erasure: the platform deletes the account, this deletes what Omabilo kept ──
 

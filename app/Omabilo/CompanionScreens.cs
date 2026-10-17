@@ -634,6 +634,12 @@ public partial class OmabiloApp
             }
 
             RenderCashFlow(view, snap);
+
+            if (snap.Items.Count > 0)
+            {
+                RenderMonthly(view, snap);
+            }
+
             return;
         }
 
@@ -656,6 +662,67 @@ public partial class OmabiloApp
         RenderAttention(view, snap);
         RenderSuggestions(view, snap);
         RenderCashFlow(view, snap);
+        RenderMonthly(view, snap);
+    }
+
+    private void RenderMonthly(UIView view, CompanionSnapshot snap)
+    {
+        var months = MonthlySummary.Build(snap.Items, DateTime.UtcNow.Date);
+        var salaries = MonthlySummary.SalaryHistory(snap.Items);
+        var en = System.Globalization.CultureInfo.GetCultureInfo("en-GB");
+
+        view.Column(["gap-3"], content: col =>
+        {
+            SectionHeader(col, "Month by month", "Totals from your records over the last six months.");
+
+            col.Grid(["grid grid-cols-1 lg:grid-cols-5 gap-4"], content: grid =>
+            {
+                grid.Box([Card.Elevated, "p-5 lg:col-span-3 flex flex-col gap-2"], content: card =>
+                {
+                    foreach (var m in months)
+                    {
+                        var label = new DateTime(m.Year, m.Month, 1).ToString("MMMM yyyy", en);
+
+                        card.Column(["gap-1 py-2 border-b border-secondary last:border-b-0"], content: c =>
+                        {
+                            c.Text([Text.Label, "text-foreground"], label);
+                            c.Text([Text.Caption, "text-muted-foreground tabular-nums"],
+                                $"Bills due {Money(m.BillsDue)} ({m.Bills}), of which you marked paid {Money(m.BillsReportedPaid)} · " +
+                                $"Receipts {Money(m.Receipts)} ({m.ReceiptCount}) · Refunds {Money(m.Refunds)}");
+                            c.Text([Text.Caption, "text-muted-foreground tabular-nums"],
+                                $"Net pay on payslips {Money(m.PayslipNet)} ({m.Payslips}) · Reported received {Money(m.IncomeReportedReceived)}" +
+                                (m.ItemsWithoutAmount > 0 ? $" · {m.ItemsWithoutAmount} record{(m.ItemsWithoutAmount == 1 ? "" : "s")} without an amount" : ""));
+                        });
+                    }
+
+                    card.Text([Text.Caption, "text-muted-foreground"], MonthlySummary.Explanation);
+                });
+
+                grid.Box([Card.Default, "p-5 lg:col-span-2 flex flex-col gap-2"], content: card =>
+                {
+                    card.Text([Text.Label, "text-foreground"], "Salary history");
+
+                    if (salaries.Count == 0)
+                    {
+                        card.Text([Text.BodySm, "text-muted-foreground"], "No payslips or salary messages found yet.");
+                    }
+
+                    foreach (var s in salaries.Take(12))
+                    {
+                        card.Box(["flex flex-row items-start justify-between gap-3 py-1.5 border-b border-secondary last:border-b-0"],
+                            onClick: () => { if (snap.Items.FirstOrDefault(i => i.Id == s.ItemId) is { } it) { _myFilter.Value = "income"; Go("my-inbox"); OpenItem(it); } }, ariaLabel: $"Open payslip {s.Period ?? (s.PayDate is { } pd ? Day(pd) : "")}", content: r =>
+                        {
+                            r.Column(["flex-1 min-w-0 gap-0.5"], content: c =>
+                            {
+                                c.Text([Text.BodySm, "text-foreground"], s.Period ?? (s.PayDate is { } d ? Day(d) : "Date unknown"));
+                                c.Text([Text.Caption, "text-muted-foreground"], (s.Employer ?? "Employer unknown") + " · " + (s.Evidence == IncomeEvidence.ReportedReceived ? "you reported it received" : "stated on the payslip"));
+                            });
+                            r.Text([Text.BodyStrong, "tabular-nums text-foreground shrink-0"], s.Net is { } n ? Money(n) : "—");
+                        });
+                    }
+                });
+            });
+        });
     }
 
     private void RenderOverviewTiles(UIView view, CompanionSnapshot snap)

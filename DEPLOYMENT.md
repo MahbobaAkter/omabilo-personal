@@ -130,6 +130,9 @@ Gmail, and nothing else is lost.
    ikon secret set GOOGLE_OAUTH_CLIENT_SECRET
    ```
 
+   Before creating the client, confirm the redirect URI: once the current code is deployed,
+   <https://omabilo-2143f1e7.ikonai.app/api/health> shows the exact `googleRedirectUri` this server sends
+   to Google. Register that exact value. It shows no secret values, only whether each is set.
 6. **Restart the app so it reads the secrets.** A deployed app reads them when an instance starts: deploy again, or wait for the next cold start. For a local run, use `ikon stop`, then `ikon run --detach`.
 7. **Verify the connection:**
    1. Sign in to the live app with a test-user Google account. Go to **Connections & privacy → Connect Gmail**.
