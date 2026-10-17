@@ -241,6 +241,14 @@ public partial class OmabiloApp
                         {
                             r.Badge("Overdue", tone: SemanticTone.Error, size: BadgeSize.Sm);
                         }
+                        else if (IsOpenBill(item) && item.DueDate is { } soon && soon <= Today.AddDays(3))
+                        {
+                            r.Badge("Due soon", tone: SemanticTone.Warning, size: BadgeSize.Sm);
+                        }
+                        else if (IsOpenBill(item))
+                        {
+                            r.Badge("Unpaid", tone: SemanticTone.Info, size: BadgeSize.Sm);
+                        }
                     });
 
                     view.Text([Text.Caption, "text-muted-foreground"],

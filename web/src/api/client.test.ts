@@ -62,6 +62,38 @@ describe('API client', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('calls the exact https API address and returns its data', async () => {
+    const fetchImpl = vi.fn(async () => json(200, { balance: 812.4 }));
+    const api = createApiClient({ baseUrl: 'https://omabilo-api.example.test', configProblem: null, demoUser: () => null, fetchImpl });
+
+    expect(await api.get<{ balance: number }>('/api/finance/overview')).toEqual({ balance: 812.4 });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://omabilo-api.example.test/api/finance/overview');
+    expect((init.headers as Record<string, string>)['X-Demo-User']).toBeUndefined();
+  });
+
+  it('treats an empty 204 answer as success with no data', async () => {
+    const api = client(async () => new Response(null, { status: 204 }));
+    expect(await api.del('/api/finance/goals/g1')).toBeUndefined();
+  });
+
+  it('never treats a redirect as success', async () => {
+    // A misconfigured proxy that redirects instead of serving the API
+    const e = await errorOf(client(async () => new Response(null, { status: 307, headers: { Location: 'https://elsewhere.test/' } })).get('/api/x'));
+    expect(e.kind).toBe('server');
+  });
+
+  it('sends a JSON body only when there is one', async () => {
+    const fetchImpl = vi.fn(async () => json(200, {}));
+    await client(fetchImpl).post('/api/x', { amount: 5 });
+    await client(fetchImpl).get('/api/y');
+    const [, post] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const [, get] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
+    expect(post.body).toBe('{"amount":5}');
+    expect((post.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    expect(get.body).toBeUndefined();
+  });
+
   it('checks health without a sign-in header', async () => {
     const fetchImpl = vi.fn(async () => json(200, { status: 'ok', storage: 'Sqlite', auth: 'Demo' }));
     await client(fetchImpl).health();

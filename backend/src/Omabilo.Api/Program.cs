@@ -8,6 +8,7 @@
 
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HttpOverrides;
 using Omabilo.Api.Auth;
 using Omabilo.Api.Endpoints;
 using Omabilo.Api.Finance;
@@ -85,7 +86,37 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     }
 }));
 
+// ── Behind a hosting proxy ───────────────────────────────────────────────────
+// Hosts end HTTPS at their proxy and forward plain HTTP with X-Forwarded-Proto/-For. Those
+// headers are believed ONLY from trusted proxies, or a client could fake "https" or its IP.
+// Default: only this machine. A deployment opts in with Proxy:TrustAllProxies (when the
+// container is reachable solely through the platform's proxy) or Proxy:KnownNetworks (CIDRs).
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    o.ForwardLimit = 1;
+
+    if (config.GetValue<bool>("Proxy:TrustAllProxies"))
+    {
+        o.KnownIPNetworks.Clear();
+        o.KnownProxies.Clear();
+    }
+
+    foreach (var cidr in config.GetSection("Proxy:KnownNetworks").Get<string[]>() ?? [])
+    {
+        if (!System.Net.IPNetwork.TryParse(cidr, out var network))
+        {
+            throw new InvalidOperationException($"Proxy:KnownNetworks entry '{cidr}' is not a network like 10.0.0.0/8.");
+        }
+
+        o.KnownIPNetworks.Add(network);
+    }
+});
+
 var app = builder.Build();
+
+// First, so every later step sees the browser's real scheme (https) and address
+app.UseForwardedHeaders();
 
 // Errors become plain problem responses: no stack traces or record contents leave the server
 app.UseExceptionHandler();
@@ -94,7 +125,9 @@ app.UseStatusCodePages();
 if (!app.Environment.IsDevelopment())
 {
     app.UseHsts();
-    app.UseHttpsRedirection();
+
+    // The host's health check calls the container directly over HTTP, so /health is not redirected
+    app.UseWhen(ctx => !ctx.Request.Path.StartsWithSegments("/health"), branch => branch.UseHttpsRedirection());
 }
 
 app.UseCors();

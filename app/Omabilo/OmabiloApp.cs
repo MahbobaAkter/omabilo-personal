@@ -3,8 +3,8 @@ return await App.Run(args);
 public record SessionIdentity(string? UserId);
 public record ClientParameters(string Name = "Ikon");
 
-// Visual direction: a calm, trustworthy money companion. Deep teal brand on a soft sea-mist
-// background, white rounded-2xl cards with gentle depth, a clear numeric type scale and
+// Visual direction: a calm, trustworthy money companion. Restrained teal on a warm off-white
+// background with deep navy text, white rounded-2xl cards with gentle depth, a clear numeric type scale and
 // comfortable density; a deep slate scheme for dark mode.
 [App]
 public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
@@ -12,11 +12,11 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
     private UI UI { get; } = new(app, new IkonTheme
     {
         ["primary"] = "teal-700",
-        ["background"] = "#eef4f2",
-        ["foreground"] = "slate-900",
+        ["background"] = "#faf7f2",
+        ["foreground"] = "#14213d",
         ["card"] = "white",
-        ["muted-foreground"] = "slate-500",
-        ["border"] = "slate-200",
+        ["muted-foreground"] = "#5d677a",
+        ["border"] = "#e7e0d5",
         ["radius"] = "rounded-2xl",
 
         DarkMode = new IkonTheme

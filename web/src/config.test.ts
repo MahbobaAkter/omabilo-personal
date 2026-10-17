@@ -23,6 +23,10 @@ describe('readConfig', () => {
     expect(readConfig({ VITE_API_BASE_URL: 'https://api.example.com', PROD: true }).apiBaseUrl).toBe('https://api.example.com');
   });
 
+  it('keeps a hosted API path prefix and only trims trailing slashes', () => {
+    expect(readConfig({ VITE_API_BASE_URL: ' https://host.example.com/omabilo/ ', PROD: true }).apiBaseUrl).toBe('https://host.example.com/omabilo');
+  });
+
   it('rejects text that is not a web address', () => {
     expect(readConfig({ VITE_API_BASE_URL: 'not a url' }).problem).toMatch(/not a valid/);
   });

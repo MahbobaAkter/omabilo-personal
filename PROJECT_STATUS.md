@@ -1,86 +1,109 @@
-# Project status
+# Project status (handoff)
 
-Last updated: 17 Oct 2026. Everything marked "verified" was checked on that date.
+Updated 17 Oct 2026. Read this first; details live in `DECISIONS.md` (why),
+`DEPLOYMENT.md` (how to deploy) and `ARCHITECTURE.md` (invoice audit and security plan).
 
-## Status at a glance
+## Goal
 
-There are three independent pieces, none of them live yet:
-- **IKON app:** works locally. Deployment is blocked on IKON credits.
-- **Standalone API + website:** work together locally; verified in a browser on desktop and phone sizes.
-- **Public website link:** blocked on an identity-provider choice and a hosted database (see `DEPLOYMENT.md`).
+Omabilo Personal ("Your money. Your way."): a mobile-friendly financial-wellbeing website at a
+public link, backed by a standalone API, with a safe path to real invoice collection later.
+**All data is fictional**; nothing connects to a bank, mailbox or provider.
 
-All data is fictional.
+## Architecture
 
-## Implemented
+| Folder | What it is | Status |
+|---|---|---|
+| `app/Omabilo/` | The original IKON app: C# screens streamed by IKON | Works locally. **Keep unchanged.** |
+| `frontend-node/` | The IKON app's viewer; only works with an IKON server | **Keep unchanged**: `ikon build`/`run`/`deploy` depend on it |
+| `backend/` | ASP.NET Core API (.NET 10), no IKON | Invoices plus per-user finances; sign-in and storage replaced (below) |
+| `web/` | React + Vite + TypeScript website for Vercel; calls `backend/` only | 7 screens, honest offline and error states |
+| `test/Omabilo.Test/` | Tests for the shared, IKON-free invoice code in `app/Omabilo/Invoices/` | |
 
-- **IKON app (`app/Omabilo`)**, 7 screens on fictional data, including Phase 1 invoices (details: `ARCHITECTURE.md`).
-- **Standalone API (`backend/`):**
-  - invoices: canonical model, idempotent intake, duplicate matching, review, audit, export, delete
-  - per-user finances, starting from fictional Finnish demo data covering 4 months:
-    - balance, transactions, loans and payments, goals and contributions
-    - expected income needing confirmation
-    - payday plan with labelled certainty, dashboard overview, monthly reports
-  - sign-in: fictional demo sign-in in Development; JWT otherwise, refusing to start unconfigured
-  - storage: in memory or SQLite (both local only)
-- **Website (`web/`):** React + Vite + TypeScript with seven screens:
-  - Dashboard
-  - Financial Inbox: filters, a detail panel, review, merge, paid/unpaid, editing, simulated imports, export, confirmed delete
-  - Debt Tracker
-  - Payday Planner
-  - Savings Goals
-  - Reports
-  - Settings & Connections
+## Done
 
-  Plus a server connection indicator and honest loading, empty, offline and error states.
-- **Deployment prep:** `backend/Dockerfile` (untested), `web/vercel.json`, `DEPLOYMENT.md`.
+- **Invoices:**
+  - canonical model separate from source records
+  - idempotent intake, duplicate matching (no automatic merge of ambiguous records), review
+  - audit history without amounts or document text
+  - export and confirmed delete-all
+- **Finances:**
+  - per-user records starting from 4 months of fictional Finnish demo data
+  - one calculator for the dashboard, payday plan, debts, goals and reports
+  - payday-plan lines labelled Confirmed, Scheduled, Estimate or Planned
+  - no double counting; unconfirmed income isn't counted
+- **Sign-in:** `X-Demo-User: demo-…` only in Development; JWT otherwise. The API refuses to start without it configured.
+- **Storage:** in memory, or a local SQLite file (git-ignored).
+- **Browser access (CORS):** only the exact origins in `Cors:AllowedOrigins`.
+- **Website:**
+  - Dashboard, Financial Inbox, Debt Tracker, Payday Planner, Savings Goals, Reports, Settings & Connections
+  - `VITE_API_BASE_URL` only, never `localhost` or `http` in production
+  - a connection indicator; no fake success
+- **HTTPS proxy fix (uncommitted, see below):** forwarded headers are believed only from a configured proxy, and `/health` is never redirected.
 
-## Recent commits and uncommitted work
+## Test results
 
-- **`eca76bf`:** the website, per-user finance API, Dockerfile and deployment docs (local only).
-- **Uncommitted:**
-  - the new label tests in `FinanceCalculatorTests.cs`
-  - updates to `DEPLOYMENT.md` and `PROJECT_STATUS.md`
-  - `frontend-node/package-lock.json` (npm churn, left out on purpose)
-
-## Last verified (17 Oct 2026)
-
-- `dotnet test backend/Omabilo.Backend.slnx`: **43 passed** on the current code, including 4 new tests for the Finnish "18,00 €" label. Windows Application Control blocked the rebuilt API once; on a later run Windows allowed it.
-- `dotnet test test/Omabilo.Test`: 36 passed.
-- `npm --prefix web test`: 15 passed. `npm audit`: 0 vulnerabilities.
-- **Docker build stage simulated:** the Dockerfile's exact files were published with `-c Release` in an empty folder. In Production mode the result refused to start without sign-in, served `/health`, returned 401 without a token or with `X-Demo-User`, and allowed only the configured CORS origin. The real `docker build` is still untested (Docker Desktop setup isn't finished).
-- `npm --prefix web run build`: type-check and build OK. The configured API address is built in, and no `localhost` address is.
+**Real automated tests (17 Oct 2026, current code):**
+- `dotnet test backend/Omabilo.Backend.slnx`: **53/53 passed**. This includes 10 proxy tests run against a *simulated* proxy in the in-memory test server.
+- `dotnet test test/Omabilo.Test`: **36/36 passed**.
+- `npm --prefix web test`: **20/20 passed**. `npm run build` (type check + build): OK. `npm audit`: 0 vulnerabilities.
 - IKON app build: 0 warnings, 0 errors.
-- In the browser against the running API:
-  - every screen loads
-  - an import and a duplicate link worked; approve and pay worked, and the balance dropped exactly once (812,40 → 754,20 €)
-  - the payday-plan numbers match the hand-checked tests
-  - the phone layout and menu work
-  - with the API stopped, every screen shows "Can't reach the server" and no figures
-- CORS: the website's exact origin is allowed; another origin is refused.
-- **Untested:**
-  - a real `docker build` (Docker Desktop setup not finished)
-  - any deployment
-  - real sign-in
-  - a hosted database
-  - screen-reader testing
-  - real email, AI or OAuth
 
-## Known bugs and blockers
+**Manual and simulated checks, not automated:**
+- Browser run of `web/` against a local API, on desktop and phone sizes: an import, a duplicate link, approve, pay (the balance dropped exactly once), and the API-down state (errors, no figures).
+- Dockerfile build stage *simulated*: its exact files were published with `dotnet publish -c Release` in an empty folder. In Production mode it refused to start without sign-in, returned 401 without a token, and allowed only the configured CORS origin.
 
-- **Public link:** needs an identity provider and a Postgres store behind `IInvoiceStore`/`IFinanceStore`. Both need your decision on providers.
-- **Windows Application Control** blocked `dotnet run` of a freshly rebuilt API on this PC ("An Application Control policy has blocked this file"). Tests still ran. It wasn't bypassed; ask the device owner, or use Docker.
-- **IKON:** 0 credits; the live IKON URL returns 404. IKON is still at `26930ef` (local `main` is ahead).
-- **Vercel:** the existing project still builds `frontend-node`, so it shows "Connecting…" until its Root Directory is changed to `web` and `VITE_API_BASE_URL` points at a deployed API.
-- **Two separate data models:** the IKON app's data (IKON state) and the API's data (SQLite/memory) don't sync.
+**Never tested:**
+- a real `docker build`
+- any deployment
+- a real identity provider
+- a hosted database
+- screen-reader testing
+- real email, AI or OAuth
 
 ## Git
 
-- **`main`** is at `eca76bf` (2 commits ahead of IKON).
-- **IKON (`origin`):** `26930ef`.
-- **GitHub (`github`):** `c8c1922` (a noreply snapshot of `1157de4`). Snapshot procedure: `DECISIONS.md`.
+- **Branch:** `main` at `978817d`, 3 commits ahead of IKON.
+- **IKON (`origin`):** `26930ef`. It has none of `1157de4`, `eca76bf` or `978817d`.
+- **GitHub (`github`):** `e624604` (pushed 17 Oct 2026), a noreply snapshot of `main` at `978817d` plus the then-uncommitted proxy fix, tests and docs. The local branch `github-main` tracks it.
+- **Recent local commits:**
+  - `1157de4`: standalone API
+  - `eca76bf`: website + finance API
+  - `978817d`: label tests + deploy notes
+- **Uncommitted (keep):**
+  - the proxy fix: `backend/src/Omabilo.Api/Program.cs`, `appsettings.json`, new `backend/tests/Omabilo.Api.Tests/ProxyTests.cs`
+  - new web tests in `web/src/api/client.test.ts` and `web/src/config.test.ts`
+  - doc updates in `DECISIONS.md`, `DEPLOYMENT.md` and this file
+  - `frontend-node/package-lock.json`: npm churn, deliberately never committed
+- **Publishing rules** (`DECISIONS.md`):
+  - GitHub gets parentless or fast-forward **noreply snapshots** built on `github-main`, so the personal emails in local commits are never published.
+  - Never push `main` to `github`, and never force-push.
+  - `ikon save` commits everything; back up and restore the lockfile around it.
 
-## Next three tasks
+## Environment issues
 
-1. Review this work, then commit locally (and later push a noreply snapshot), each with your approval.
-2. Decide the identity provider and the Postgres host, then write the Postgres stores and JWT setup and test them on a staging host.
-3. Start Docker Desktop, build and run `backend/Dockerfile` locally, then deploy the API and point Vercel's `web/` project at it.
+- **Docker Desktop:** installed, but its engine doesn't start (`failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`). WSL has no Docker distribution, so first-time setup was never completed. The Docker Desktop process exits after launch. **Impact:** no real image build or container test. **Fix:** you open Docker Desktop and finish its setup.
+- **Windows Application Control:** it sometimes blocks a freshly rebuilt `Omabilo.Api.dll` ("An Application Control policy has blocked this file"), stopping `dotnet run` and, once, the tests. A later rebuild was allowed. It was never bypassed.
+- **IKON:** 0 credits, so IKON deploys fail and the IKON app's live address returns 404 (run `ikon status` locally to see the app).
+- **Vercel:** the existing project still builds `frontend-node`, so it shows "Connecting…". Its Root Directory must become `web`.
+
+## HTTPS proxy issue
+
+- **Problem:** hosts end HTTPS at their proxy and forward plain HTTP. Before the fix the API redirected every request, which broke browser CORS checks.
+- **Fixed in code (uncommitted):**
+  - `UseForwardedHeaders` trusts only `Proxy:TrustAllProxies` (private container port) or `Proxy:KnownNetworks`.
+  - Untrusted headers are ignored.
+  - `ASPNETCORE_HTTPS_PORT=443` sets the redirect target.
+- **Still unverifiable locally:** what a real host sends and its proxy's address range. Choose the setting from the host's documentation (`DEPLOYMENT.md`).
+
+## Remaining blockers before a public link
+
+1. **Identity provider** (your choice; free tiers need your account). Then the website needs a real sign-in flow that sends `Authorization: Bearer`; today it only sends `X-Demo-User`.
+2. **Hosted database:** a Postgres store behind `IInvoiceStore`/`IFinanceStore` (your choice of host). SQLite and in-memory storage are not durable.
+3. **A real Docker build** and a container host choice; set the host's proxy setting.
+4. **Security before any real data** (`DEPLOYMENT.md` and `ARCHITECTURE.md`): encryption at rest, private document storage, tested backup and restore, account deletion, retention.
+5. **Invoice integrations:** only manual, demo and *simulated* email and scans. Gmail, Outlook and Finnish e-invoices are "Not connected". Real forwarding, AI extraction and OAuth need credentials, credits and consent flows (`ARCHITECTURE.md` phases 2–4).
+
+## Single best next action
+
+Commit the uncommitted proxy fix and its tests locally (leaving out `frontend-node/package-lock.json`),
+so the verified work is safe in Git. Then decide the identity provider and the Postgres host.

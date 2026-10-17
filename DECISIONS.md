@@ -41,6 +41,14 @@ Each entry is a choice that would be costly to undo or rediscover.
   - Paying an invoice records one transaction linked to it, and un-paying removes it.
 - **The website never shows fake success or fallback data.** Failures show an error with Retry, and the API address comes only from `VITE_API_BASE_URL`, which can never be `localhost` or `http` in production.
 
+## Hosting proxy (chosen 17 Oct 2026)
+
+- **The API believes `X-Forwarded-Proto`/`-For` only from proxies a deployment names:**
+  - `Proxy:TrustAllProxies`, only when the container port is private
+  - or `Proxy:KnownNetworks` CIDRs
+
+  The default trusts nothing outside the container, because a trusted fake header could make plain HTTP look secure. `/health` is exempt from the HTTPS redirect for plain-HTTP health checks.
+
 ## Git
 
 - **`origin`** is the IKON repo and is updated by `ikon save`, which commits every change.

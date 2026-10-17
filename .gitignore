@@ -26,16 +26,6 @@ obj
 # Local check scripts, screenshots and logs
 /scripts/
 
-# BEGIN ikon-assets — real binaries offloaded to .ikonasset pointers (managed by `ikon asset`, do not edit)
-branding/logo.png
-public/apple-touch-icon.png
-public/favicon-16.png
-public/favicon-192.png
-public/favicon-32.png
-public/favicon-512.png
-public/favicon.ico
-public/maskable-512.png
-# END ikon-assets
 
 # Standalone backend: local databases and private settings never go into git
 backend/**/App_Data/
@@ -50,3 +40,14 @@ backend/**/secrets.json
 
 # Local editor and run settings
 .claude/
+
+# BEGIN ikon-assets — real binaries offloaded to .ikonasset pointers (managed by `ikon asset`, do not edit)
+branding/logo.png
+public/apple-touch-icon.png
+public/favicon-16.png
+public/favicon-192.png
+public/favicon-32.png
+public/favicon-512.png
+public/favicon.ico
+public/maskable-512.png
+# END ikon-assets
