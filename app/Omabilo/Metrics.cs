@@ -116,10 +116,14 @@ public partial class OmabiloApp
             _debts.ReplaceWhere(d => d.Id == debt.Id, d => d with { Balance = Math.Max(0, d.Balance - (item.Amount ?? 0)) });
         }
 
+        // A bill created from an invoice marks that invoice paid too
+        SyncInvoiceFromBill(item.Id, paid: true);
+
         OfferUndo($"Paid {item.From} · {Fin.Eur(item.Amount ?? 0, 2)}", () =>
         {
             _inbox.ReplaceWhere(i => i.Id == item.Id, _ => item);
             _txns.RemoveAll(t => t.Id == txn.Id);
+            SyncInvoiceFromBill(item.Id, paid: false);
 
             if (debt != null)
             {
