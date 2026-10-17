@@ -1,0 +1,21 @@
+/* Your app's styles.
+
+   The IKON app shell — the connecting, reconnecting and offline overlays, the toast strip and the
+   hero layout — is styled by @ikonai/sdk-react-ui/theme/ikon-app.css, imported in main.tsx. That
+   file is part of the package, so `ikon update` keeps it current.
+
+   The shell's rules are imported before this file, so at equal specificity what you write here
+   wins — no !important needed. A few of them are more specific than one class (`.ikon-hero h1`,
+   the `:hover` and `:focus` states); match that shape to override those:
+
+     .ikon-offline-title { font-size: 20px; }
+
+   To restyle the whole shell rather than one rule, override the design tokens instead:
+
+     :root {
+       --ikon-bg-card: #101c2e;
+       --ikon-text-primary: #eef2f7;
+       --ikon-radius-base: 0.75rem;
+     }
+
+   The full token list is in @ikonai/sdk-react-ui/theme/ikon-tokens.css. */

@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);1998;9113</NoWarn>
+    <NuGetAuditMode>direct</NuGetAuditMode>
+    <Version>1.0.0</Version>
+    <IkonApp>true</IkonApp>
+    <IsPackable>false</IsPackable>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <PropertyGroup>
+    <IkonRoot Condition="'$(IkonRoot)' == ''">$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildProjectDirectory), 'ikon-platform.slnx'))</IkonRoot>
+    <IsIkonInternal Condition="'$(IkonRoot)' != ''">true</IsIkonInternal>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Ikon.Agent" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Agent.Docs" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.AI" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.AI.Emergence" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.AI.Speech.Azure" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.AI.Speech.Google" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.App" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.App.Storage.Postgres" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Common" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Common.Core" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Crosswind" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Parallax" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Resonance" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Resonance.Core" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Server" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Server.HotReload" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Teleport" Version="3.16.9" Condition="'$(IsIkonInternal)' != 'true'" />
+    <PackageReference Include="Ikon.Sdk" Version="2.0.60" Condition="'$(IsIkonInternal)' != 'true'" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(IsIkonInternal)' == 'true'">
+    <ProjectReference Include="$(IkonRoot)\Ikon.Agent\Ikon.Agent.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Agent.Docs\Ikon.Agent.Docs.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.AI\Ikon.AI.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.AI.Emergence\Ikon.AI.Emergence.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.AI.Speech.Azure\Ikon.AI.Speech.Azure.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.AI.Speech.Google\Ikon.AI.Speech.Google.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.App\Ikon.App.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.App.Storage.Postgres\Ikon.App.Storage.Postgres.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Common\Ikon.Common.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Common.Core\Ikon.Common.Core.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Crosswind\Ikon.Crosswind.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Parallax\Ikon.Parallax.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Resonance\Ikon.Resonance.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Resonance.Core\Ikon.Resonance.Core.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Server\Ikon.Server.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Server.HotReload\Ikon.Server.HotReload.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Teleport\Ikon.Teleport.csproj" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Sdk\Ikon.Sdk.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(IsIkonInternal)' == 'true' And !$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)').StartsWith($([MSBuild]::NormalizeDirectory('$(IkonRoot)')), StringComparison.OrdinalIgnoreCase))">
+    <ProjectReference Include="$(IkonRoot)\Ikon.Analyzers\Ikon.Analyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="$(IkonRoot)\Ikon.Teleport.Generator\Ikon.Teleport.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/../../schema')">
+    <IkonTeleportSchemaFile Include="$(MSBuildProjectDirectory)/../../schema/**/*" />
+  </ItemGroup>
+  <Target Name="IkonAppTeleportBuildInternal" BeforeTargets="BeforeBuild" Condition="'$(IsIkonInternal)' == 'true' And Exists('$(MSBuildProjectDirectory)/../../schema')" Inputs="@(IkonTeleportSchemaFile);$(IkonRoot)/artifacts/bin/BuildUtil/$(Configuration.ToLowerInvariant())/build-util.dll" Outputs="$(IntermediateOutputPath)ikon-teleport.stamp">
+    <MSBuild Projects="$(IkonRoot)/BuildUtil/BuildUtil.csproj" Targets="Build" Properties="Configuration=$(Configuration)" RemoveProperties="OutDir;OutputPath;PublishDir;BaseOutputPath;IntermediateOutputPath;BaseIntermediateOutputPath">
+      <Output TaskParameter="TargetOutputs" ItemName="_BuildUtilOutput" />
+    </MSBuild>
+    <Exec Command="dotnet &quot;@(_BuildUtilOutput)&quot; --generate-app-teleport --app-dir &quot;$(MSBuildProjectDirectory)/../..&quot;" />
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Touch Files="$(IntermediateOutputPath)ikon-teleport.stamp" AlwaysCreate="true" />
+    <ItemGroup>
+      <_IkonGeneratedGone Include="@(Compile)" Condition="$([System.String]::Copy('%(Compile.FullPath)').StartsWith('$(MSBuildProjectDirectory)$([System.IO.Path]::DirectorySeparatorChar)Generated$([System.IO.Path]::DirectorySeparatorChar)', StringComparison.OrdinalIgnoreCase)) And !Exists('%(Compile.FullPath)')" />
+      <Compile Remove="@(_IkonGeneratedGone)" />
+      <Compile Include="$(MSBuildProjectDirectory)/Generated/**/*.cs" Exclude="@(Compile)" />
+    </ItemGroup>
+  </Target>
+  <Target Name="IkonAppTeleportBuildExternal" BeforeTargets="BeforeBuild" Condition="'$(IsIkonInternal)' != 'true' And Exists('$(MSBuildProjectDirectory)/../../schema')" Inputs="@(IkonTeleportSchemaFile)" Outputs="$(IntermediateOutputPath)ikon-teleport.stamp">
+    <Exec Command="ikon schema --project-dir &quot;$(MSBuildProjectDirectory)/../..&quot;" EnvironmentVariables="CI=true" ContinueOnError="WarnAndContinue" />
+    <MakeDir Directories="$(IntermediateOutputPath)" Condition="'$(MSBuildLastTaskResult)' == 'true'" />
+    <Touch Files="$(IntermediateOutputPath)ikon-teleport.stamp" AlwaysCreate="true" Condition="'$(MSBuildLastTaskResult)' == 'true'" />
+    <ItemGroup>
+      <_IkonGeneratedGone Include="@(Compile)" Condition="$([System.String]::Copy('%(Compile.FullPath)').StartsWith('$(MSBuildProjectDirectory)$([System.IO.Path]::DirectorySeparatorChar)Generated$([System.IO.Path]::DirectorySeparatorChar)', StringComparison.OrdinalIgnoreCase)) And !Exists('%(Compile.FullPath)')" />
+      <Compile Remove="@(_IkonGeneratedGone)" />
+      <Compile Include="$(MSBuildProjectDirectory)/Generated/**/*.cs" Exclude="@(Compile)" />
+    </ItemGroup>
+  </Target>
+  <ItemGroup>
+    <None Include="../../ikon-config*.toml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\data\**\*" CopyToOutputDirectory="Always" Link="Data\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

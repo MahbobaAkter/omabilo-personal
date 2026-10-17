@@ -1,0 +1,75 @@
+// ReSharper disable RedundantUsingDirective.Global
+
+// <ikon-usings> Managed by `ikon update`. Do not edit; add your own usings below this block.
+global using Ikon.AI.Classification;
+global using Ikon.AI.Decisions;
+global using Ikon.AI.DepthEstimation;
+global using Ikon.AI.Embeddings;
+global using Ikon.AI.Emergence;
+global using Ikon.AI.FileConversion;
+global using Ikon.AI;
+global using Ikon.AI.ImageGeneration;
+global using Ikon.AI.ImageSegmentation;
+global using Ikon.AI.ImageUpscaling;
+global using Ikon.AI.Kernel;
+global using Ikon.AI.LLM;
+global using Ikon.AI.MeshGeneration;
+global using Ikon.AI.MusicGeneration;
+global using Ikon.AI.OCR;
+global using Ikon.AI.Provenance;
+global using Ikon.AI.SoundEffectGeneration;
+global using Ikon.AI.SpeechGeneration;
+global using Ikon.AI.SpeechRecognition;
+global using Ikon.AI.Utils;
+global using Ikon.AI.VideoEnhancement;
+global using Ikon.AI.VideoGeneration;
+global using Ikon.AI.VideoSegmentation;
+global using Ikon.AI.WebSearching;
+global using Ikon.AI.WebScraping;
+global using Ikon.Agent;
+global using Ikon.Agent.Skills;
+global using Ikon.App;
+global using Ikon.App.Cron;
+global using Ikon.App.Http;
+global using Ikon.App.Payments;
+global using Ikon.App.Reactive;
+global using Ikon.Common.Core.Assets;
+global using Ikon.Common.Core.Email;
+global using Ikon.Common.Core.Functions;
+global using Ikon.Common.Core.Functions.Policy;
+global using Ikon.Common.Core.Reactive;
+global using Ikon.Common.Core.Scope;
+global using Ikon.Common.Core.Telephony;
+global using Ikon.Common.Core;
+global using Ikon.Common;
+global using Ikon.Parallax.Components.Charts;
+global using Ikon.Parallax.Components.DataTable;
+global using Ikon.Parallax.Components.ImageEditor;
+global using Ikon.Parallax.Components.Standard;
+global using Ikon.Parallax.Theming;
+global using Ikon.Parallax;
+global using Ikon.Resonance.Analysis;
+global using Ikon.Resonance.Core;
+global using Ikon.Resonance.Effects;
+global using Ikon.Resonance;
+global using Ikon.Server;
+global using System.Collections.Concurrent;
+global using System.Collections.Generic;
+global using System.IO;
+global using System.Linq;
+global using System.Text;
+global using System.Text.Json.Serialization;
+global using System.Text.Json;
+global using System.Threading.Tasks;
+global using System.Threading;
+global using System;
+
+// `IView` as a friendly alias for `UIView`
+global using IView = Ikon.Parallax.UIView;
+global using Context = Ikon.Common.Core.Protocol.Context;
+global using DescriptionAttribute = Ikon.Common.DescriptionAttribute;
+global using CultureInfo = System.Globalization.CultureInfo;
+global using DateTimeStyles = System.Globalization.DateTimeStyles;
+global using NumberStyles = System.Globalization.NumberStyles;
+global using WebUtility = System.Net.WebUtility;
+// </ikon-usings>

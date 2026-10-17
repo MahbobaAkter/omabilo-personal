@@ -1,0 +1,17 @@
+/* Your sign-in screen styles.
+
+   The screen itself is styled by @ikonai/sdk-react-ui/theme/ikon-auth.css, imported in main.tsx.
+   That file is part of the package, so `ikon update` keeps it current.
+
+   Its rules are imported before this file, so at equal specificity what you write here wins. A
+   few of them are more specific than one class (`.ikon-auth-divider span`, the `::placeholder`
+   rules, the `:hover` and `:focus` states); match that shape to override those:
+
+     .ikon-auth-container { max-width: 460px; }
+     .ikon-auth-title { font-size: 28px; }
+
+   Add your logo above the title by rendering an <img class="ikon-auth-logo"> in auth-guard.tsx;
+   the class is already styled.
+
+   For a whole-screen restyle, override the design tokens in src/app.css instead of overriding
+   these rules one at a time. */

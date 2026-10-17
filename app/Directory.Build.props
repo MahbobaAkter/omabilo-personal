@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <ArtifactsPath>$(MSBuildThisFileDirectory)..\build\app\artifacts</ArtifactsPath>
+    <RestoreEnablePackagePruning>false</RestoreEnablePackagePruning>
+    <!-- Hot reload compiles with Roslyn directly and runs no source generators; writing generator
+         output to obj/ lets that compile include the generated halves ([GeneratedRegex] and
+         friends) instead of failing with CS8795 the moment one is used. -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+  </PropertyGroup>
+  <Import Project="$(MSBuildThisFileDirectory)..\build\app\ikon-platform-repo.props" Condition="Exists('$(MSBuildThisFileDirectory)..\build\app\ikon-platform-repo.props')" />
+</Project>

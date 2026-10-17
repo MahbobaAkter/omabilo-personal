@@ -1,0 +1,114 @@
+# Schema version. The ikon tool upgrades older files and saves at its current version; a file newer
+# than the tool refuses to load (update the tool).
+ConfigVersion = 7
+
+# The space database that backs PersistentReactive state. Empty: the platform picks the built-in
+# "app" database, or the space's only platform-managed one, and records the choice so it stays put.
+# Set it only to override; it must be a name 'ikon db list' shows. An unknown name logs a warning and
+# state falls back to asset storage.
+StateDatabase = ""
+
+# What happens when a version of the app is activated (activation is separate from deployment)
+[Activation]
+# Stop all active sessions of the app on activation
+StopSessions = true
+
+# How visitors enter the app frontend
+[Auth]
+# Sign-in providers (google, apple, microsoft, signicat, email, passkey) plus anonymous entry:
+# "guest" gives each visitor a private, device-scoped anonymous user; "global" gives every visitor
+# one shared anonymous user on one shared app instance (cheap for public landing pages; scale out
+# with [Sharded] on the SessionIdentity record; detect with Context.IsGlobal). List both to enter as
+# "global" and upgrade a visitor to "guest" on demand. Signing in upgrades either to the account.
+Methods = ["google", "apple", "microsoft", "signicat", "email", "passkey", "guest"]
+# If non-empty, only emails from these domains may join the app (e.g. ["mycompany.com"]). It is checked
+# when a person joins, so anyone who already has a profile in the app, or who was invited at a verified
+# email address, still gets in from any domain
+DomainAllowlist = []
+# false: visitors enter anonymously and sign in on demand (branch on Context.IsAnonymous, prompt with
+# ClientFunctions.LoginAsync("google")). true: a sign-in wall before the app loads, with a "Continue
+# as guest" button when Methods lists "guest" or "global"; with neither listed, no route is
+# prerendered to crawlable HTML.
+RequireSignIn = false
+
+# The platform's feedback sheet: report a problem or an idea by text, voice, files and screenshot.
+# Reports go to the app's space ('ikon issue list --source person', Studio). Who is offered it is the
+# space's setting, which is off for a new app: turn it on live with 'ikon feedback set --audience signed-in'
+# or in Studio (Settings > Sharing), and 'ikon feedback status' shows it. The platform draws its own
+# button; ClientFunctions.OpenFeedbackAsync is only for an app that wants a control of its own.
+[Feedback]
+# "overlay": a floating feedback button the platform draws for everyone offered feedback, so the
+# app needs no control of its own; each person can hide it from the sheet. "none": no button.
+Button = "overlay"
+
+# Usage measurement. An event names the feature and the control, never what anyone typed, picked or sent.
+[Analytics]
+# Record an event per action a person runs: feature, control, success and duration. A report filed
+# from the app then carries the last few actions that led to it. Records only users who granted
+# ConsentPurposes.UsageMeasurement.
+UiActions = false
+
+# Boot snapshot: the app's initial UI captured at bundle/deploy time so the first paint is instant.
+# The snapshot is a PUBLIC asset, so all content is replaced with skeletons by default; wrap safe
+# content (logos, static chrome) in SnapshotReveal to show it, or a public page's root to show all of it.
+# The Parallax guide's "Per-route snapshots and SEO" section has the details.
+[BootSnapshot]
+# Public routes to snapshot (e.g. ["/", "/pricing"]); empty disables snapshots. Each must be a path the
+# app serves without redirecting — a redirect during capture ships the bundle without snapshots, so
+# declare "/home", not "/", if "/" redirects there. When the app opens without signing in
+# (RequireSignIn = false, or "guest"/"global" in Auth.Methods) each route is also prerendered to
+# crawlable HTML with a generated sitemap.xml and robots.txt. Add content routes (one per article) in
+# code with app.OnSnapshotRoutes(...). A snapshot is matched by path alone, so "/?game=abc" first
+# paints the "/" snapshot until the live page replaces it.
+Routes = ["/"]
+# How many routes are captured, Routes and app.OnSnapshotRoutes together, in that order; 1 to 200.
+# Routes past it get no snapshot, no prerendered page and no sitemap entry, and the deploy names them
+# in a warning. Each route adds capture time to every deploy, and all of them share a 10-minute budget.
+MaxRoutes = 50
+# Seed rules, only for apps that render different pages per identity or path shape: ordered
+# "pattern:variantId" entries, first match wins. A segment is a literal, "*" (one segment) or a final
+# "**" (the rest), so "/**:shell" matches every path. Each variant id is captured once as a skeleton
+# the app renders by branching on view.SnapshotVariant == "id". Guests use an exact route snapshot
+# before these rules; signed-in visitors use these rules first. Variants are never prerendered to
+# HTML or listed in the sitemap.
+# GuestSeeds = ["/**:welcome"]
+GuestSeeds = []
+# SignedInSeeds = ["/**:shell"]
+SignedInSeeds = []
+
+# The app's privacy notice and terms. Write legal/privacy.md and legal/terms.md in the app root (beside
+# public/ and data/) and each is served as a page at its path below, or set a URL to redirect that
+# path to your own page. With neither, the path stays the app's own route.
+[Legal]
+# Absolute https:// URL of a privacy notice published elsewhere. Empty serves legal/privacy.md.
+PrivacyUrl = ""
+# Absolute https:// URL of terms published elsewhere. Empty serves legal/terms.md.
+TermsUrl = ""
+# Path the privacy notice is served at: absolute, no file extension, not under /ikon or /api. Link to
+# it with rel="external" so the browser loads the page instead of the app routing it.
+PrivacyPath = "/legal/privacy"
+# Path the terms are served at, with the same rules as PrivacyPath
+TermsPath = "/legal/terms"
+
+# Custom packaging steps for 'ikon bundle' and 'ikon deploy'
+[Package]
+# Commands run in the app root after the build, before zipping (e.g. ["python scripts/pack_assets.py"]).
+# IKON_BUNDLE_APP_DIR becomes the app's folder on the server (its Data/ is app.Files.Data; binaries and
+# #! scripts keep their execute bit); programs written to IKON_BUNDLE_TOOLS_DIR are on the deployed
+# app's PATH; IKON_BUNDLE_FRONTEND_DIR is the frontend build. Anything else under IKON_BUNDLE_DIR is
+# zipped but never reaches the server.
+PrePackage = []
+
+# Programs the app starts that are downloaded rather than committed to its tools/ folder
+[Tools]
+# Commands run in the app root that fill IKON_TOOLS_DIR (tools/<runtime>/) for IKON_TOOLS_RUNTIME (e.g.
+# ["python scripts/fetch_tools.py"]): before 'ikon run' for this machine, before 'ikon run --container'
+# for linux-x64 (linux-arm64 on Arm), and before 'ikon bundle'/'ikon deploy' for linux-x64. They run
+# every time, so return quickly when the folder is complete and do nothing for a runtime you have no
+# programs for. Keep the folder out of git.
+Fetch = []
+
+# Target information for deployment (automatically configured with 'ikon link')
+[Target]
+SpaceId = "6ad2bf16644b301473e4962c"
+Name = "Omabilo"
