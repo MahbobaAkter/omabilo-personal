@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/Config/">
+    <File Path="ikon-config.staging.toml" />
     <File Path="ikon-config.toml" />
   </Folder>
   <Folder Name="/App/">
