@@ -45,7 +45,8 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
   - Review the answers with `ikon db query "select * from omabilo_test_feedback order by created_utc"`.
 - **Connected companion (IKON app, "Your money"):**
   - **Sign-in and access:** IKON sign-in (Google, email code, passkey, guest). Gmail connects only as a separate, explicit step: OAuth code flow with PKCE and a one-time state, scope `gmail.readonly`, tokens encrypted with AES-256-GCM.
-  - **Sync:** server-side every 15 minutes (`[Cron]`) plus "Sync now". The first scan is bounded (90 days, 300 messages). After that, sync is incremental, with a rescan when Gmail's history expires, retries with backoff and a per-user lock.
+  - **Gmail push (code deployed, Pub/Sub not set up yet):** `POST /api/gmail/push` accepts Pub/Sub notices (signed OIDC token or URL token), deduplicates them, and syncs only the named mailbox. Watches start after a sync, renew daily, and stop on disconnect. It needs the IKON secrets `GMAIL_PUBSUB_TOPIC` plus `GMAIL_PUSH_SERVICE_ACCOUNT` or `GMAIL_PUSH_TOKEN`; until then mailboxes are polled every 5 minutes.
+  - **Sync:** a server-side sweep every 5 minutes (`[Cron]`; each mailbox every 5 minutes without push, hourly with an active watch) plus "Sync now". The first scan is bounded (90 days, 300 messages). After that, sync is incremental, with a rescan when Gmail's history expires, retries with backoff and a per-user lock.
   - **Reading mail:**
     - rule-based classification (English and Finnish)
     - extraction for invoices, reminders, collection notices, payslips, receipts and refunds
@@ -80,7 +81,7 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
 
 **Never tested:**
 - a real `docker build`, or a deployment of the standalone `backend/` + `web/`
-- **real Google OAuth and real Gmail:** no OAuth client exists yet
+- **financial extraction on real Gmail:** live OAuth now works (verified 17 Oct 2026 15:46 UTC with the dedicated test inbox: status Connected, only `gmail.readonly` granted, both tokens stored encrypted, first scan done, 0 failures, another account still sees "Connect Gmail"). The test inbox held one non-financial message, so no real financial record has been extracted yet. The first failed attempt was the Gmail API being disabled in the client's project (403 `accessNotConfigured`); the callback now says so.
 - a **real AI call:** AI is only tested with a fake model
 - **the live scheduler is verified:** after deploying `7d647f6`, `/api/health` showed the job ran on the live server at 2026-10-17 15:00:03 UTC (result: skipped, Gmail not configured). `ikon cron list/run --app-id` still wrongly says "no active deployment", which is a tool problem, not the app.
 - **a published privacy policy:** `/legal/privacy` currently serves the app shell, not a policy. `PRIVACY_DRAFT.md` needs the owner's details before it can become `legal/privacy.md`.
