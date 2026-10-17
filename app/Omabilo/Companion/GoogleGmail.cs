@@ -283,9 +283,22 @@ public sealed class GoogleClient(HttpClient http) : IGoogleOAuth, IGmailApi
 
             if (doc.RootElement.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.Object)
             {
-                if (err.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0 && errors[0].TryGetProperty("reason", out var r))
+                if (err.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0
+                    && errors[0].TryGetProperty("reason", out var r))
                 {
                     return r.GetString();
+                }
+
+                // Newer Google errors carry the reason in details[] (ErrorInfo), e.g. SERVICE_DISABLED
+                if (err.TryGetProperty("details", out var details) && details.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var d in details.EnumerateArray())
+                    {
+                        if (d.ValueKind == JsonValueKind.Object && d.TryGetProperty("reason", out var dr) && dr.GetString() is { Length: > 0 } reason)
+                        {
+                            return reason;
+                        }
+                    }
                 }
 
                 return err.TryGetProperty("status", out var s) ? s.GetString() : null;

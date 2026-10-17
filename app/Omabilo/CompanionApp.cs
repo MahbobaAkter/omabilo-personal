@@ -70,7 +70,8 @@ public partial class OmabiloApp
         }
         catch (Exception ex)
         {
-            Log.Instance.Warning($"gmail callback failed: {ex.GetType().Name}");
+            // The type, plus Google's status and reason code when there is one; never tokens or codes
+            Log.Instance.Warning($"gmail callback failed: {ex.GetType().Name}{(ex is GmailApiException g ? $" ({g.Status} {g.Reason})" : "")}");
             result = new ConnectResult(false, null, "Something went wrong while connecting Gmail. Please try again from Omabilo.", "error");
         }
 

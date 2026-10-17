@@ -113,7 +113,21 @@ public sealed class SyncEngine(
             return new(false, saved.UserId, "Google didn't allow ongoing access. Remove Omabilo in your Google account's third-party access, then connect again.", "no_refresh_token");
         }
 
-        var profile = await Retry.GmailAsync(() => gmail.GetProfileAsync(tokens.AccessToken, ct), ct, delay: delay);
+        GmailProfile profile;
+
+        try
+        {
+            profile = await Retry.GmailAsync(() => gmail.GetProfileAsync(tokens.AccessToken, ct), ct, delay: delay);
+        }
+        catch (GmailApiException ex)
+        {
+            // Status and Google's reason code only: never a token, code or message content
+            log($"gmail connect: profile check failed ({ex.Status} {ex.Reason}) for user {saved.UserId}");
+            await TryRevokeAsync(tokens.RefreshToken, ct);
+            await store.AddAuditAsync(saved.UserId, "gmail_connect_failed", null, ct);
+            return ProfileFailure(saved.UserId, ex);
+        }
+
         var now = clock();
 
         await store.SaveConnectionAsync(new GmailConnection
@@ -131,6 +145,28 @@ public sealed class SyncEngine(
         await store.AddAuditAsync(saved.UserId, "gmail_connected", null, ct);
 
         return new(true, saved.UserId, $"Gmail ({profile.EmailAddress}) is connected. Omabilo will now look for financial messages.");
+    }
+
+    /// <summary>Google issued tokens but Gmail itself refused: say which side has to change.</summary>
+    internal static ConnectResult ProfileFailure(string userId, GmailApiException ex)
+    {
+        var reason = ex.Reason ?? "";
+
+        if (ex.Status == 403 && (reason.Equals("accessNotConfigured", StringComparison.OrdinalIgnoreCase)
+            || reason.Equals("SERVICE_DISABLED", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new(false, userId,
+                "Google approved the sign-in, but the Gmail API isn't enabled in the Google Cloud project that owns Omabilo's OAuth client. " +
+                "The app owner needs to enable it in that project (APIs & Services → Library → Gmail API → Enable), wait a few minutes and try again. Nothing was connected.",
+                "gmail_api_disabled");
+        }
+
+        if (ex.Status == 403)
+        {
+            return new(false, userId, $"Google didn't let Omabilo read this mailbox (Google's reason: {reason}). Nothing was connected.", "gmail_forbidden");
+        }
+
+        return new(false, userId, $"Gmail didn't answer properly (error {ex.Status}). Please try again in a few minutes. Nothing was connected.", "gmail_unavailable");
     }
 
     /// <summary>Revokes Google's grant (best effort) and deletes the stored tokens. Records stay unless asked.</summary>

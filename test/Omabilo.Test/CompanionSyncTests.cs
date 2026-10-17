@@ -81,6 +81,41 @@ public class GmailConnectTests
         Assert.Empty(rig.Store.Connections);
     }
 
+    // Regression (17 Oct 2026, live): Google issued tokens, then Gmail answered 403 because the Gmail
+    // API was off in the OAuth client's project, and the callback showed only "Something went wrong".
+    [Theory]
+    [InlineData("""{"error":{"code":403,"message":"Gmail API has not been used in project 1 before or it is disabled.","errors":[{"domain":"usageLimits","reason":"accessNotConfigured"}],"status":"PERMISSION_DENIED"}}""")]
+    [InlineData("""{"error":{"code":403,"message":"Gmail API is disabled.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED"}]}}""")]
+    public async Task Gmail_api_disabled_is_explained_and_the_grant_revoked(string googleError)
+    {
+        var rig = new CompanionRig();
+        rig.Google.ProfileError = (403, googleError);
+        var state = HttpUtility.ParseQueryString(new Uri(await rig.Engine.BeginConnectAsync("alice", default)).Query)["state"];
+
+        var result = await rig.Engine.CompleteConnectAsync(state, "good-code", null, default);
+
+        Assert.False(result.Ok);
+        Assert.Equal("gmail_api_disabled", result.Code);
+        Assert.Contains("Gmail API", result.Message);
+        Assert.Equal(["refresh-1"], rig.Google.Revoked);
+        Assert.Empty(rig.Store.Connections);
+        Assert.Contains(rig.Store.Audit, a => a.UserId == "alice" && a.Entry.Action == "gmail_connect_failed");
+    }
+
+    [Fact]
+    public async Task Another_gmail_refusal_names_googles_reason_without_connecting()
+    {
+        var rig = new CompanionRig();
+        rig.Google.ProfileError = (403, """{"error":{"code":403,"errors":[{"reason":"domainPolicy"}],"status":"PERMISSION_DENIED"}}""");
+        var state = HttpUtility.ParseQueryString(new Uri(await rig.Engine.BeginConnectAsync("alice", default)).Query)["state"];
+
+        var result = await rig.Engine.CompleteConnectAsync(state, "good-code", null, default);
+
+        Assert.Equal("gmail_forbidden", result.Code);
+        Assert.Contains("domainPolicy", result.Message);
+        Assert.Empty(rig.Store.Connections);
+    }
+
     [Fact]
     public async Task A_bad_code_is_refused()
     {

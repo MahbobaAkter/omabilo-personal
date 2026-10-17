@@ -153,6 +153,9 @@ public sealed class FakeGoogle : HttpMessageHandler
     public bool HistoryExpired;
     public string? RefreshError;
     public readonly Queue<HttpStatusCode> GmailFailures = new();
+
+    /// <summary>A raw error Google returns for the profile call, e.g. the Gmail API being disabled.</summary>
+    public (int Status, string Body)? ProfileError;
     public string CurrentAccessToken = "access-0";
     public readonly HashSet<string> ValidAccessTokens = [];
 
@@ -209,6 +212,11 @@ public sealed class FakeGoogle : HttpMessageHandler
 
         var path = url.AbsolutePath.Replace("/gmail/v1/users/me", "");
         var query = HttpUtility.ParseQueryString(url.Query);
+
+        if (path == "/profile" && ProfileError is { } pe)
+        {
+            return new HttpResponseMessage((HttpStatusCode)pe.Status) { Content = new StringContent(pe.Body, System.Text.Encoding.UTF8, "application/json") };
+        }
 
         if (path == "/profile") return Json(200, new { emailAddress = "test.user@example.com", historyId = HistoryCounter.ToString() });
 
