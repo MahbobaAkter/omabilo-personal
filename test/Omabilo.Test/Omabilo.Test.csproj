@@ -14,6 +14,7 @@
     <Compile Include="..\..\app\Omabilo\Invoices\InvoiceBook.cs" Link="Domain\InvoiceBook.cs" />
     <Compile Include="..\..\app\Omabilo\Invoices\InvoiceSources.cs" Link="Domain\InvoiceSources.cs" />
     <Compile Include="..\..\app\Omabilo\Invoices\SyntheticInvoices.cs" Link="Domain\SyntheticInvoices.cs" />
+    <Compile Include="..\..\app\Omabilo\Invoices\InvoiceExplainer.cs" Link="Domain\InvoiceExplainer.cs" />
   </ItemGroup>
 
   <ItemGroup>

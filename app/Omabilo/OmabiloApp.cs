@@ -95,7 +95,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                         {
                             switch (_section.Value)
                             {
-                                case "inbox": view.Feature("inbox", content: RenderInbox); break;
+                                case "inbox": view.Feature("inbox", content: RenderInboxScreen); break;
                                 case "invoices": view.Feature("invoices", content: RenderInvoices); break;
                                 case "debts": view.Feature("debts", content: RenderDebts); break;
                                 case "payday": view.Feature("payday", content: RenderPayday); break;

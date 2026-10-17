@@ -38,6 +38,9 @@ public link, backed by a standalone API, with a safe path to real invoice collec
   - Dashboard, Financial Inbox, Debt Tracker, Payday Planner, Savings Goals, Reports, Settings & Connections
   - `VITE_API_BASE_URL` only, never `localhost` or `http` in production
   - a connection indicator; no fake success
+- **Financial Inbox user test (IKON app):** "Explain an invoice" tab. It analyses three fictional emails or a pasted one with fixed rules, not AI (`Invoices/InvoiceExplainer.cs`), then shows a 7-question feedback form (`Invoices/InvoiceLab.cs`).
+  - Answers are saved in the app's built-in IKON database, table `omabilo_test_feedback`. Pasted text is never stored.
+  - Review the answers with `ikon db query "select * from omabilo_test_feedback order by created_utc"`.
 - **HTTPS proxy fix (uncommitted, see below):** forwarded headers are believed only from a configured proxy, and `/health` is never redirected.
 
 ## Test results
@@ -62,8 +65,8 @@ public link, backed by a standalone API, with a safe path to real invoice collec
 
 ## Git
 
-- **Branch:** `main` at `978817d`, 3 commits ahead of IKON.
-- **IKON (`origin`):** `26930ef`. It has none of `1157de4`, `eca76bf` or `978817d`.
+- **Branch:** `main` at `cafa063` (IKON app polish: plain-language dashboard, payday breakdown, Smart Spend Guard), in step with IKON.
+- **IKON (`origin`):** `cafa063`, saved with `ikon save` and **deployed** on 17 Oct 2026. The live app works for signed-out visitors, who get fresh fictional demo data.
 - **GitHub (`github`):** `e624604` (pushed 17 Oct 2026), a noreply snapshot of `main` at `978817d` plus the then-uncommitted proxy fix, tests and docs. The local branch `github-main` tracks it.
 - **Recent local commits:**
   - `1157de4`: standalone API
@@ -83,7 +86,7 @@ public link, backed by a standalone API, with a safe path to real invoice collec
 
 - **Docker Desktop:** installed, but its engine doesn't start (`failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`). WSL has no Docker distribution, so first-time setup was never completed. The Docker Desktop process exits after launch. **Impact:** no real image build or container test. **Fix:** you open Docker Desktop and finish its setup.
 - **Windows Application Control:** it sometimes blocks a freshly rebuilt `Omabilo.Api.dll` ("An Application Control policy has blocked this file"), stopping `dotnet run` and, once, the tests. A later rebuild was allowed. It was never bypassed.
-- **IKON:** 0 credits, so IKON deploys fail and the IKON app's live address returns 404 (run `ikon status` locally to see the app).
+- **IKON:** deployed (deployment hash `f7d7d94e`, about 20 credits available before deploying). `ikon browse --as-guest` is refused for this space ("shared session needs a developer"), but a real signed-out browser loads the app.
 - **Vercel:** the existing project still builds `frontend-node`, so it shows "Connecting…". Its Root Directory must become `web`.
 
 ## HTTPS proxy issue
