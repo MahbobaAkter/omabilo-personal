@@ -14,13 +14,26 @@ public sealed record SyncOptions
     public int MaxIncrementalMessages { get; init; } = 500;
     public long MaxAttachmentBytes { get; init; } = 10 * 1024 * 1024;
     public int MaxAiCallsPerSync { get; init; } = 25;
-    public TimeSpan PollInterval { get; init; } = TimeSpan.FromMinutes(15);
+    /// <summary>How often a mailbox is checked when no Gmail push watch is active.</summary>
+    public TimeSpan PollInterval { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>With an active push watch, the periodic check only reconciles missed notices.</summary>
+    public TimeSpan PushReconcileInterval { get; init; } = TimeSpan.FromMinutes(60);
+
+    /// <summary>Gmail watches lapse after 7 days; Google recommends renewing daily.</summary>
+    public TimeSpan WatchRenewAfter { get; init; } = TimeSpan.FromHours(24);
+
+    /// <summary>A push that finds the mailbox busy waits this long between tries.</summary>
+    public TimeSpan PushBusyWait { get; init; } = TimeSpan.FromSeconds(20);
     public TimeSpan LockDuration { get; init; } = TimeSpan.FromMinutes(10);
 }
 
 public sealed record ConnectResult(bool Ok, string? UserId, string Message, string? Code = null);
 
 public sealed record SyncResult(bool Ok, int Scanned, int NewItems, int Updated, string Message, string? Code = null);
+
+/// <summary>What one push notice led to: the users to sync now, and how many were duplicates or not ours.</summary>
+public sealed record PushOutcome(IReadOnlyList<string> UsersToSync, int Duplicates, int UnknownMailbox);
 
 public sealed class SyncEngine(
     ICompanionStore store,
@@ -33,8 +46,14 @@ public sealed class SyncEngine(
     SyncOptions options,
     Func<DateTime> clock,
     Action<string> log,
-    Func<TimeSpan, CancellationToken, Task>? delay = null)
+    Func<TimeSpan, CancellationToken, Task>? delay = null,
+    Func<string?>? pushTopic = null)
 {
+    private readonly Func<TimeSpan, CancellationToken, Task> _wait = delay ?? Task.Delay;
+
+    /// <summary>The Pub/Sub topic Gmail should notify, or null when push is not set up (polling only).</summary>
+    public string? PushTopic => pushTopic?.Invoke();
+
     public static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(10);
 
     /// <summary>What still has to be set up before Gmail can be connected, or empty when ready.</summary>
@@ -174,6 +193,20 @@ public sealed class SyncEngine(
     {
         if (await store.GetConnectionAsync(userId, ct) is { } c && protector() is { } keys)
         {
+            if (await store.GetWatchAsync(userId, ct) is { ExpiresUtc: { } until } && until > clock())
+            {
+                try
+                {
+                    var (token, _) = await AccessTokenAsync(c, ct);
+                    await gmail.StopWatchAsync(token, ct);
+                }
+                catch (Exception ex)
+                {
+                    // Revoking below ends the notices anyway: Gmail stops watching a mailbox it may no longer read
+                    log($"gmail stop watch failed: {ex.GetType().Name}");
+                }
+            }
+
             if (keys.Unprotect(c.RefreshTokenEnc, userId) is { } refresh)
             {
                 await TryRevokeAsync(refresh, ct);
@@ -312,6 +345,7 @@ public sealed class SyncEngine(
                 if (outcome == Outcome.Updated) updated++;
             }
 
+            var pushActive = await EnsureWatchAsync(userId, token, ct);
             var done = clock();
             await store.SaveConnectionAsync(c with
             {
@@ -324,7 +358,7 @@ public sealed class SyncEngine(
                 LastSuccessUtc = done,
                 LastError = null,
                 FailureCount = 0,
-                NextAttemptUtc = done.Add(options.PollInterval),
+                NextAttemptUtc = done.Add(pushActive ? options.PushReconcileInterval : options.PollInterval),
                 LastSyncNewItems = created,
                 LastSyncScanned = scanned,
                 InitialScanDone = true,
@@ -374,6 +408,130 @@ public sealed class SyncEngine(
     }
 
     private sealed record Refreshed(string AccessEnc, DateTime Expires);
+
+    // ── Gmail push ──────────────────────────────────────────────────────────
+
+    /// <summary>Starts or renews the Gmail watch when push is configured. Never fails the sync: without
+    /// a watch the mailbox is simply polled more often. True when a watch is active.</summary>
+    private async Task<bool> EnsureWatchAsync(string userId, string token, CancellationToken ct)
+    {
+        var topic = PushTopic;
+        var watch = await store.GetWatchAsync(userId, ct) ?? new GmailWatch { UserId = userId };
+        var now = clock();
+
+        if (topic == null)
+        {
+            return false;
+        }
+
+        var current = watch.Topic == topic && watch.LastError == null && watch.ExpiresUtc is { } exp && exp > now.AddHours(1);
+
+        if (current && watch.RenewedUtc is { } renewed && now - renewed < options.WatchRenewAfter)
+        {
+            return true;
+        }
+
+        try
+        {
+            var result = await Retry.GmailAsync(() => gmail.WatchAsync(token, topic, ct), ct, delay: delay);
+            await store.SaveWatchAsync(watch with { Topic = topic, ExpiresUtc = result.ExpiresUtc, RenewedUtc = now, LastError = null }, ct);
+
+            if (!current)
+            {
+                await store.AddAuditAsync(userId, "gmail_watch_started", null, ct);
+                log($"gmail watch active for user {userId} until {result.ExpiresUtc:u}");
+            }
+
+            return true;
+        }
+        catch (GmailApiException ex)
+        {
+            // Typical: 403/404 when the topic is missing or Gmail may not publish to it
+            var reason = $"Gmail watch failed: {ex.Status} {ex.Reason}";
+            log($"{reason} for user {userId}");
+
+            if (watch.LastError != reason)
+            {
+                await store.AddAuditAsync(userId, "gmail_watch_failed", null, ct);
+            }
+
+            await store.SaveWatchAsync(watch with { Topic = topic, LastError = reason }, ct);
+            return current;
+        }
+    }
+
+    /// <summary>Records one Pub/Sub notice and says whom to sync. Duplicates (Pub/Sub delivers at least
+    /// once) and notices older than what was already synced are counted and dropped.</summary>
+    public async Task<PushOutcome> HandlePushAsync(GmailPushNotice notice, CancellationToken ct)
+    {
+        var users = await store.UsersForGmailAsync(notice.EmailAddress, ct);
+        var toSync = new List<string>();
+        var duplicates = 0;
+        var now = clock();
+
+        foreach (var userId in users)
+        {
+            var watch = await store.GetWatchAsync(userId, ct) ?? new GmailWatch { UserId = userId };
+            var connection = await store.GetConnectionAsync(userId, ct);
+            var synced = ulong.TryParse(connection?.HistoryId, out var h) ? h : 0;
+
+            if (notice.HistoryId <= watch.LastPushHistoryId || notice.HistoryId <= synced)
+            {
+                duplicates++;
+                await store.SaveWatchAsync(watch with { DuplicatePushCount = watch.DuplicatePushCount + 1 }, ct);
+                continue;
+            }
+
+            await store.SaveWatchAsync(watch with { LastPushUtc = now, LastPushHistoryId = notice.HistoryId, PushCount = watch.PushCount + 1 }, ct);
+
+            // A connection backing off after errors keeps its backoff; the notice is remembered for later
+            if (connection is { Status: ConnectionStatus.Error } && connection.NextAttemptUtc > now)
+            {
+                continue;
+            }
+
+            await store.MarkSyncDueAsync(userId, now, ct);
+            toSync.Add(userId);
+        }
+
+        return new PushOutcome(toSync, duplicates, users.Count == 0 ? 1 : 0);
+    }
+
+    /// <summary>The sync a notice triggers. Waits if a sync is already running, and runs once more if
+    /// another notice arrived while it worked, so nothing announced is left for the fallback sweep.</summary>
+    public async Task<SyncResult> SyncAfterPushAsync(string userId, CancellationToken ct)
+    {
+        SyncResult last = new(false, 0, 0, 0, "Not run", "not_run");
+
+        for (var round = 0; round < 3; round++)
+        {
+            var started = clock();
+
+            if (await store.GetWatchAsync(userId, ct) is { } w)
+            {
+                await store.SaveWatchAsync(w with { LastPushSyncStartedUtc = started }, ct);
+            }
+
+            for (var attempt = 0; attempt < 6; attempt++)
+            {
+                last = await SyncAsync(userId, ct);
+
+                if (last.Code != "busy")
+                {
+                    break;
+                }
+
+                await _wait(options.PushBusyWait, ct);
+            }
+
+            if (!last.Ok || await store.GetWatchAsync(userId, ct) is not { LastPushUtc: { } pushed } || pushed <= started)
+            {
+                break;
+            }
+        }
+
+        return last;
+    }
 
     private async Task<(string Token, Refreshed? Refreshed)> AccessTokenAsync(GmailConnection c, CancellationToken ct)
     {

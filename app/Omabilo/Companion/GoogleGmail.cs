@@ -23,6 +23,9 @@ public sealed record GmailFullMessage(GmailMessageMeta Meta, string BodyText, IR
 
 public sealed record GmailHistoryPage(IReadOnlyList<string> AddedMessageIds, string? NextPageToken, string HistoryId);
 
+/// <summary>Gmail's answer to users.watch: the mailbox history id now, and when the watch lapses.</summary>
+public sealed record GmailWatchResult(string HistoryId, DateTime ExpiresUtc);
+
 /// <summary>Google refused the grant (revoked, expired or never given): the person has to reconnect.</summary>
 public sealed class GoogleAuthException(string code, string message) : Exception(message)
 {
@@ -48,6 +51,12 @@ public interface IGmailApi
     Task<GmailFullMessage> GetFullAsync(string accessToken, string id, CancellationToken ct);
     Task<byte[]> GetAttachmentAsync(string accessToken, string messageId, string attachmentId, CancellationToken ct);
     Task<GmailHistoryPage> ListHistoryAsync(string accessToken, string startHistoryId, string? pageToken, CancellationToken ct);
+
+    /// <summary>Asks Gmail to publish a notice to the Pub/Sub topic when the inbox changes. Reads nothing and changes no mail.</summary>
+    Task<GmailWatchResult> WatchAsync(string accessToken, string topicName, CancellationToken ct);
+
+    /// <summary>Stops those notices for this mailbox.</summary>
+    Task StopWatchAsync(string accessToken, CancellationToken ct);
 }
 
 public interface IGoogleOAuth
@@ -250,16 +259,40 @@ public sealed class GoogleClient(HttpClient http) : IGoogleOAuth, IGmailApi
         }
     }
 
-    private async Task<JsonDocument> GetJsonAsync(string accessToken, string url, CancellationToken ct)
+    public async Task<GmailWatchResult> WatchAsync(string accessToken, string topicName, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        var body = JsonSerializer.Serialize(new { topicName, labelIds = new[] { "INBOX" }, labelFilterBehavior = "include" });
+        using var doc = await SendJsonAsync(HttpMethod.Post, accessToken, $"{GmailBase}/watch", body, ct);
+        var root = doc.RootElement;
+        var expires = root.TryGetProperty("expiration", out var e) && long.TryParse(e.ValueKind == JsonValueKind.String ? e.GetString() : e.GetRawText(), out var ms)
+            ? DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime
+            : DateTime.UtcNow.AddDays(7);
+        return new GmailWatchResult(root.TryGetProperty("historyId", out var h) ? (h.ValueKind == JsonValueKind.String ? h.GetString()! : h.GetRawText()) : "", expires);
+    }
+
+    public async Task StopWatchAsync(string accessToken, CancellationToken ct)
+    {
+        using var _ = await SendJsonAsync(HttpMethod.Post, accessToken, $"{GmailBase}/stop", "{}", ct);
+    }
+
+    private Task<JsonDocument> GetJsonAsync(string accessToken, string url, CancellationToken ct) => SendJsonAsync(HttpMethod.Get, accessToken, url, null, ct);
+
+    private async Task<JsonDocument> SendJsonAsync(HttpMethod method, string accessToken, string url, string? json, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(method, url);
+
+        if (json != null)
+        {
+            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        }
+
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         using var response = await http.SendAsync(request, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
 
         if (response.IsSuccessStatusCode)
         {
-            return JsonDocument.Parse(body);
+            return JsonDocument.Parse(body.Length > 0 ? body : "{}");
         }
 
         var status = (int)response.StatusCode;

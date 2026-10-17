@@ -207,3 +207,23 @@ public sealed record CompanionSettings
     public decimal? NetSalary { get; init; }
     public decimal? EverydaySpendPerDay { get; init; }
 }
+
+/// <summary>One mailbox's Gmail push subscription (users.watch). Kept apart from the connection row
+/// so a sync saving the connection can never overwrite what a notification just recorded.</summary>
+public sealed record GmailWatch
+{
+    public required string UserId { get; init; }
+    public string? Topic { get; init; }
+    public DateTime? ExpiresUtc { get; init; }
+    public DateTime? RenewedUtc { get; init; }
+    public string? LastError { get; init; }
+    public DateTime? LastPushUtc { get; init; }
+
+    /// <summary>The highest history id any notification has announced: older or repeated ones are duplicates.</summary>
+    public ulong LastPushHistoryId { get; init; }
+    public long PushCount { get; init; }
+    public long DuplicatePushCount { get; init; }
+
+    /// <summary>When the newest push-triggered sync started, to tell whether a push arrived after it.</summary>
+    public DateTime? LastPushSyncStartedUtc { get; init; }
+}

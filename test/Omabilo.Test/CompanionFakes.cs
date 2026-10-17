@@ -13,6 +13,41 @@ public sealed class InMemoryCompanionStore : ICompanionStore
     public readonly Dictionary<string, FinancialItem> Items = new();
     public readonly Dictionary<string, CompanionSettings> Settings = new();
     public readonly List<(string UserId, AuditEntry Entry)> Audit = new();
+    public readonly Dictionary<string, GmailWatch> Watches = new();
+
+    public Task<GmailWatch?> GetWatchAsync(string userId, CancellationToken ct) { lock (_gate) return Task.FromResult(Watches.GetValueOrDefault(userId)); }
+
+    public Task SaveWatchAsync(GmailWatch w, CancellationToken ct) { lock (_gate) Watches[w.UserId] = w; return Task.CompletedTask; }
+
+    public Task<IReadOnlyList<string>> UsersForGmailAsync(string email, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult<IReadOnlyList<string>>(Connections.Values
+                .Where(c => string.Equals(c.GoogleEmail, email, StringComparison.OrdinalIgnoreCase) && c.RefreshTokenEnc != null && c.Status != ConnectionStatus.NeedsReconnect)
+                .Select(c => c.UserId).ToList());
+        }
+    }
+
+    public Task MarkSyncDueAsync(string userId, DateTime now, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            if (Connections.TryGetValue(userId, out var c) && c.NextAttemptUtc > now) Connections[userId] = c with { NextAttemptUtc = now };
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<PushOverview> PushOverviewAsync(DateTime now, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            var w = Watches.Values.ToList();
+            return Task.FromResult(new PushOverview(w.Count(x => x.ExpiresUtc > now && x.LastError == null), w.Count(x => x.LastError != null),
+                w.Max(x => x.LastPushUtc), w.Sum(x => x.PushCount), w.Sum(x => x.DuplicatePushCount)));
+        }
+    }
 
     public Task<GmailConnection?> GetConnectionAsync(string userId, CancellationToken ct) { lock (_gate) return Task.FromResult(Connections.GetValueOrDefault(userId)); }
 
@@ -28,7 +63,7 @@ public sealed class InMemoryCompanionStore : ICompanionStore
         return Task.CompletedTask;
     }
 
-    public Task DeleteConnectionAsync(string userId, CancellationToken ct) { lock (_gate) Connections.Remove(userId); return Task.CompletedTask; }
+    public Task DeleteConnectionAsync(string userId, CancellationToken ct) { lock (_gate) { Connections.Remove(userId); Watches.Remove(userId); } return Task.CompletedTask; }
 
     public Task<IReadOnlyList<string>> DueConnectionsAsync(DateTime now, int max, CancellationToken ct)
     {
@@ -124,6 +159,7 @@ public sealed class InMemoryCompanionStore : ICompanionStore
             foreach (var s in States.Values.Where(s => s.UserId == userId).Select(s => s.State).ToList()) States.Remove(s);
             Settings.Remove(userId);
             Connections.Remove(userId);
+            Watches.Remove(userId);
             Audit.RemoveAll(a => a.UserId == userId);
         }
 
@@ -156,6 +192,13 @@ public sealed class FakeGoogle : HttpMessageHandler
 
     /// <summary>A raw error Google returns for the profile call, e.g. the Gmail API being disabled.</summary>
     public (int Status, string Body)? ProfileError;
+
+    /// <summary>The mailbox address the profile reports, so tests can connect different mailboxes.</summary>
+    public string EmailAddress = "test.user@example.com";
+    public readonly List<string> WatchTopics = [];
+    public int StopCalls;
+    public (int Status, string Reason)? WatchError;
+    public DateTime WatchExpires = DateTime.UtcNow.AddDays(7);
     public string CurrentAccessToken = "access-0";
     public readonly HashSet<string> ValidAccessTokens = [];
 
@@ -218,7 +261,21 @@ public sealed class FakeGoogle : HttpMessageHandler
             return new HttpResponseMessage((HttpStatusCode)pe.Status) { Content = new StringContent(pe.Body, System.Text.Encoding.UTF8, "application/json") };
         }
 
-        if (path == "/profile") return Json(200, new { emailAddress = "test.user@example.com", historyId = HistoryCounter.ToString() });
+        if (path == "/profile") return Json(200, new { emailAddress = EmailAddress, historyId = HistoryCounter.ToString() });
+
+        if (path == "/watch" && request.Method == HttpMethod.Post)
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            WatchTopics.Add(body.RootElement.GetProperty("topicName").GetString()!);
+            if (WatchError is { } we) return Json(we.Status, new { error = new { code = we.Status, errors = new[] { new { reason = we.Reason } } } });
+            return Json(200, new { historyId = HistoryCounter.ToString(), expiration = new DateTimeOffset(WatchExpires).ToUnixTimeMilliseconds().ToString() });
+        }
+
+        if (path == "/stop" && request.Method == HttpMethod.Post)
+        {
+            StopCalls++;
+            return new HttpResponseMessage(HttpStatusCode.NoContent);
+        }
 
         if (path == "/messages")
         {
@@ -319,12 +376,14 @@ public sealed class CompanionRig
 
     public static readonly GoogleOAuthConfig Config = new("client-id.apps.googleusercontent.com", "client-secret", "https://omabilo.example/api/oauth/google/callback");
 
+    public string? PushTopic;
+
     public CompanionRig(FakeAi? ai = null, SyncOptions? options = null)
     {
         Ai = ai;
         Client = new GoogleClient(new HttpClient(Google));
         Engine = new SyncEngine(Store, Client, Client, () => Config, () => Keys, new PdfAttachmentReader(), ai, options ?? new SyncOptions(),
-            () => Now, Logs.Add, (_, _) => Task.CompletedTask);
+            () => Now, Logs.Add, (_, _) => Task.CompletedTask, () => PushTopic);
         Service = new CompanionService(Store, Engine, () => Now);
     }
 

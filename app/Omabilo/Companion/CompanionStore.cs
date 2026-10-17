@@ -39,11 +39,27 @@ public interface ICompanionStore
 
     Task DeleteAllForUserAsync(string userId, CancellationToken ct);
 
+    // ── Gmail push (users.watch + Pub/Sub) ──
+
+    Task<GmailWatch?> GetWatchAsync(string userId, CancellationToken ct);
+    Task SaveWatchAsync(GmailWatch watch, CancellationToken ct);
+
+    /// <summary>Omabilo users whose connected Gmail is this address (a notification names only the mailbox).</summary>
+    Task<IReadOnlyList<string>> UsersForGmailAsync(string googleEmail, CancellationToken ct);
+
+    /// <summary>Makes this user's connection due now, so the next sweep picks it up if the push-triggered run can't.</summary>
+    Task MarkSyncDueAsync(string userId, DateTime now, CancellationToken ct);
+
+    /// <summary>Totals for the health check: how many watches are live and when the last notice came. No user data.</summary>
+    Task<PushOverview> PushOverviewAsync(DateTime now, CancellationToken ct);
+
     /// <summary>Retention: expired sign-in states, old non-financial message ids and old audit rows.</summary>
     Task PruneAsync(DateTime now, CancellationToken ct);
 }
 
 public sealed record AuditEntry(DateTime AtUtc, string Action, string? ItemId);
+
+public sealed record PushOverview(int ActiveWatches, int WatchErrors, DateTime? LastPushUtc, long Pushes, long DuplicatePushes);
 
 public static class CompanionJson
 {
@@ -126,6 +142,19 @@ public sealed class PostgresCompanionStore(Func<CancellationToken, Task<DbConnec
             item_id text
         );
         create index if not exists om_audit_user on om_audit (user_id, at_utc desc);
+        create table if not exists om_gmail_watch (
+            user_id text primary key,
+            topic text,
+            expires_utc timestamptz,
+            renewed_utc timestamptz,
+            last_error text,
+            last_push_utc timestamptz,
+            last_push_history_id numeric(20) not null default 0,
+            push_count bigint not null default 0,
+            duplicate_push_count bigint not null default 0,
+            last_push_sync_started_utc timestamptz
+        );
+        create index if not exists om_connections_email on om_connections (lower(google_email));
         """;
 
     private async Task<DbConnection> OpenAsync(CancellationToken ct)
@@ -215,8 +244,90 @@ public sealed class PostgresCompanionStore(Func<CancellationToken, Task<DbConnec
     public async Task DeleteConnectionAsync(string userId, CancellationToken ct)
     {
         await using var conn = await OpenAsync(ct);
-        await using var cmd = Cmd(conn, "delete from om_connections where user_id = @u", ("u", userId));
+        await using var cmd = Cmd(conn, "delete from om_gmail_watch where user_id = @u; delete from om_connections where user_id = @u", ("u", userId));
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<GmailWatch?> GetWatchAsync(string userId, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn, "select * from om_gmail_watch where user_id = @u", ("u", userId));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+
+        if (!await r.ReadAsync(ct))
+        {
+            return null;
+        }
+
+        return new GmailWatch
+        {
+            UserId = userId,
+            Topic = Str(r, "topic"),
+            ExpiresUtc = Time(r, "expires_utc"),
+            RenewedUtc = Time(r, "renewed_utc"),
+            LastError = Str(r, "last_error"),
+            LastPushUtc = Time(r, "last_push_utc"),
+            LastPushHistoryId = Convert.ToUInt64(r.GetValue(r.GetOrdinal("last_push_history_id"))),
+            PushCount = r.GetInt64(r.GetOrdinal("push_count")),
+            DuplicatePushCount = r.GetInt64(r.GetOrdinal("duplicate_push_count")),
+            LastPushSyncStartedUtc = Time(r, "last_push_sync_started_utc"),
+        };
+    }
+
+    public async Task SaveWatchAsync(GmailWatch w, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn,
+            """
+            insert into om_gmail_watch (user_id, topic, expires_utc, renewed_utc, last_error, last_push_utc, last_push_history_id, push_count, duplicate_push_count, last_push_sync_started_utc)
+            values (@u, @topic, @exp, @ren, @err, @push, @hist, @n, @dup, @started)
+            on conflict (user_id) do update set topic = excluded.topic, expires_utc = excluded.expires_utc, renewed_utc = excluded.renewed_utc,
+                last_error = excluded.last_error, last_push_utc = excluded.last_push_utc, last_push_history_id = excluded.last_push_history_id,
+                push_count = excluded.push_count, duplicate_push_count = excluded.duplicate_push_count, last_push_sync_started_utc = excluded.last_push_sync_started_utc
+            """,
+            ("u", w.UserId), ("topic", w.Topic), ("exp", Utc(w.ExpiresUtc)), ("ren", Utc(w.RenewedUtc)), ("err", w.LastError), ("push", Utc(w.LastPushUtc)),
+            ("hist", (decimal)w.LastPushHistoryId), ("n", w.PushCount), ("dup", w.DuplicatePushCount), ("started", Utc(w.LastPushSyncStartedUtc)));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<string>> UsersForGmailAsync(string googleEmail, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn,
+            "select user_id from om_connections where lower(google_email) = lower(@e) and refresh_token_enc is not null and status <> 'NeedsReconnect'",
+            ("e", googleEmail));
+        var list = new List<string>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+
+        while (await r.ReadAsync(ct))
+        {
+            list.Add(r.GetString(0));
+        }
+
+        return list;
+    }
+
+    public async Task MarkSyncDueAsync(string userId, DateTime now, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn, "update om_connections set next_attempt_utc = least(next_attempt_utc, @now) where user_id = @u", ("u", userId), ("now", Utc(now)));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<PushOverview> PushOverviewAsync(DateTime now, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn,
+            """
+            select count(*) filter (where expires_utc > @now and last_error is null), count(*) filter (where last_error is not null),
+                   max(last_push_utc), coalesce(sum(push_count), 0), coalesce(sum(duplicate_push_count), 0)
+            from om_gmail_watch
+            """,
+            ("now", Utc(now)));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        await r.ReadAsync(ct);
+        return new PushOverview(Convert.ToInt32(r.GetValue(0)), Convert.ToInt32(r.GetValue(1)),
+            r.IsDBNull(2) ? null : DateTime.SpecifyKind(r.GetDateTime(2), DateTimeKind.Utc), Convert.ToInt64(r.GetValue(3)), Convert.ToInt64(r.GetValue(4)));
     }
 
     public async Task<IReadOnlyList<string>> DueConnectionsAsync(DateTime now, int max, CancellationToken ct)
@@ -420,7 +531,7 @@ public sealed class PostgresCompanionStore(Func<CancellationToken, Task<DbConnec
     {
         await using var conn = await OpenAsync(ct);
 
-        foreach (var table in new[] { "om_items", "om_messages", "om_settings", "om_audit", "om_oauth_states", "om_connections" })
+        foreach (var table in new[] { "om_items", "om_messages", "om_settings", "om_audit", "om_oauth_states", "om_gmail_watch", "om_connections" })
         {
             await using var cmd = Cmd(conn, $"delete from {table} where user_id = @u", ("u", userId));
             await cmd.ExecuteNonQueryAsync(ct);

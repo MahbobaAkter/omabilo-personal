@@ -45,6 +45,11 @@ public partial class OmabiloApp
 
     private static string Money(decimal v) => InvoiceExplainer.Money(v);
 
+    /// <summary>How new mail reaches Omabilo for this person right now, in plain words.</summary>
+    private static string SyncCadence(CompanionSnapshot snap) => snap.PushActive(DateTime.UtcNow)
+        ? "new mail is processed as it arrives (Gmail push), with an hourly check as backup"
+        : "new mail is checked automatically every 5 minutes";
+
     private static string Day(DateTime d) => InvoiceExplainer.Day(d);
 
     private static string Ago(DateTime utc)
@@ -530,7 +535,7 @@ public partial class OmabiloApp
                         {
                             ConnectionStatus.NeedsReconnect => "Google no longer allows access. Connect again to continue.",
                             ConnectionStatus.Error => $"Last sync failed: {c.LastError}. Retrying automatically.",
-                            _ when c.LastSuccessUtc is { } t => $"Last synced {Ago(t)} · {c.LastSyncScanned} new message{(c.LastSyncScanned == 1 ? "" : "s")} checked · syncs every 15 minutes",
+                            _ when c.LastSuccessUtc is { } t => $"Last synced {Ago(t)} · {c.LastSyncScanned} new message{(c.LastSyncScanned == 1 ? "" : "s")} checked · {SyncCadence(snap)}",
                             _ => "First scan pending",
                         });
                 });
@@ -573,7 +578,7 @@ public partial class OmabiloApp
                 {
                     "Google shows you exactly what you allow. Omabilo never asks for your Google password.",
                     "Clearly unrelated mail isn't downloaded in full. For financial messages Omabilo keeps a short excerpt, not the whole email.",
-                    "The first scan looks back 90 days (you can change this). New mail is checked every 15 minutes.",
+                    "The first scan looks back 90 days (you can change this). After that, new mail is picked up automatically, without you opening Omabilo.",
                     "Disconnect at any time, and delete everything Omabilo kept.",
                 })
                 {
@@ -1400,7 +1405,7 @@ public partial class OmabiloApp
                     {
                         ConnectionStatus.NeedsReconnect => "Needs reconnecting: Google no longer allows access",
                         ConnectionStatus.Error => $"Last sync failed ({c.LastError}). Retrying automatically.",
-                        _ => c.InitialScanDone ? "Connected and syncing every 15 minutes" : "Connected; first scan running",
+                        _ => c.InitialScanDone ? $"Connected · {SyncCadence(snap)}" : "Connected; first scan running",
                     });
                     FieldLine(card, "Permission", "Read-only Gmail access (gmail.readonly). Omabilo can't send, delete or change mail.");
                     FieldLine(card, "Connected", Day(c.ConnectedUtc));

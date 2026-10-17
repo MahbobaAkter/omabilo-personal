@@ -23,7 +23,12 @@ public sealed record CompanionSnapshot(
     IncomeOutlook Income,
     CashFlowPlan Plan,
     IReadOnlyList<Suggestion> Suggestions,
-    IReadOnlyList<RecurringPattern> Recurring);
+    IReadOnlyList<RecurringPattern> Recurring,
+    GmailWatch? Watch = null)
+{
+    /// <summary>True while Gmail push notices are set up for this mailbox, so new mail arrives without polling.</summary>
+    public bool PushActive(DateTime now) => Watch is { LastError: null, ExpiresUtc: { } e } && e > now;
+}
 
 public static class CompanionEdits
 {
@@ -110,7 +115,8 @@ public sealed class CompanionService(ICompanionStore store, SyncEngine engine, F
         var income = ItemRules.Income(items, settings, today);
         var plan = CashFlowPlanner.Plan(items, settings, income, today);
         var suggestions = CashFlowPlanner.Suggest(items, plan, income, settings, today);
-        return new CompanionSnapshot(connection, settings, items, income, plan, suggestions, ItemRules.Recurring(items, today));
+        var watch = connection == null ? null : await store.GetWatchAsync(userId, ct);
+        return new CompanionSnapshot(connection, settings, items, income, plan, suggestions, ItemRules.Recurring(items, today), watch);
     }
 
     public async Task<(FinancialItem? Item, IReadOnlyList<string> Errors)> EditAsync(string userId, string itemId, ItemEdit edit, CancellationToken ct)
