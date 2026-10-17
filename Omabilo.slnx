@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/Config/">
+    <File Path="ikon-config.toml" />
+  </Folder>
+  <Folder Name="/App/">
+    <Project Path="app/Omabilo/Omabilo.csproj" />
+  </Folder>
+  <Folder Name="/Frontend/">
+    <Project Path="frontend-node/Omabilo.Frontend.Node.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfcfc" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0b0d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="__IKON_APP_NAME__" />
+    <title>__IKON_APP_NAME__</title>
+
+    <style>
+      :root { --ikon-boot-bg: #fcfcfc; --ikon-boot-fg: #161618; --ikon-boot-dim: #6e6e74; }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) { --ikon-boot-bg: #0b0b0d; --ikon-boot-fg: #f7f7f7; --ikon-boot-dim: #aeb2b8; }
+      }
+      :root[data-theme='dark'] { --ikon-boot-bg: #0b0b0d; --ikon-boot-fg: #f7f7f7; --ikon-boot-dim: #aeb2b8; }
+      .ikon-boot { position: fixed; top: 0; right: 0; bottom: 0; left: 0; overflow: auto; z-index: 2147483646;
+        padding: 48px 24px; text-align: center; background: var(--ikon-boot-bg); color: var(--ikon-boot-fg);
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+      .ikon-boot-inner { max-width: 480px; margin: 0 auto; }
+      .ikon-boot-title { font-size: 22px; font-weight: 600; margin-bottom: 10px; }
+      .ikon-boot-body { font-size: 15px; line-height: 1.5; }
+      .ikon-boot-agent { font-size: 12px; line-height: 1.5; margin-top: 16px; word-break: break-word; color: var(--ikon-boot-dim); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <noscript>
+      <div class="ikon-boot"><div class="ikon-boot-inner">
+        <div class="ikon-boot-title">JavaScript is required</div>
+        <div class="ikon-boot-body">This app needs JavaScript to run. Please enable JavaScript in your browser settings and reload the page.</div>
+      </div></div>
+    </noscript>
+
+    <script>
+      (function () {
+        var logs = /[?&]ikon[-_]logs\b/.test(location.search), first = null, box, ran = false, over = null, watch = 0;
+
+        function esc(v) { return String(v).replace(/[&<>]/g, function (c) { return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; }); }
+        function str(v) { try { return typeof v === 'string' ? v : JSON.stringify(v); } catch (e) { return String(v); } }
+        function root() { return document.getElementById('root'); }
+
+        function paint(title, body) {
+          var host = root();
+          if (!host || over) return;
+          over = host.appendChild(document.createElement('div'));
+          over.className = 'ikon-boot';
+          over.innerHTML = '<div class="ikon-boot-inner"><div class="ikon-boot-title">' + title +
+            '</div><div class="ikon-boot-body">' + esc(body) + '</div><div class="ikon-boot-agent">' + esc(navigator.userAgent) + '</div></div>';
+        }
+
+        function shown() {
+          var host = root();
+          for (var n = host && host.firstElementChild; n; n = n.nextElementSibling) if (n !== over) return true;
+          return !!document.getElementById('ikon-prerender') && !document.documentElement.hasAttribute('data-ikon-prerender-skip');
+        }
+
+        function log(kind, message) {
+          if (!logs) return;
+          if (!box) {
+            box = document.body.appendChild(document.createElement('div'));
+            box.setAttribute('style', 'position:fixed;left:0;right:0;bottom:0;max-height:52%;overflow:auto;z-index:2147483647;' +
+              'background:rgba(0,0,0,.86);color:#8ef;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;' +
+              'padding:10px 12px;white-space:pre-wrap;word-break:break-word');
+          }
+          var line = box.appendChild(document.createElement('div'));
+          line.style.color = kind === 'error' ? '#ff8a8a' : kind === 'warn' ? '#ffd479' : '#8ef';
+          line.textContent = kind.toUpperCase() + '  ' + message;
+          box.scrollTop = box.scrollHeight;
+        }
+
+        function fail(what) { first = first || str(what); log('error', str(what)); }
+
+        if (logs) {
+          ['log', 'info', 'warn', 'error'].forEach(function (kind) {
+            var was = console[kind];
+            console[kind] = function () { log(kind, Array.prototype.map.call(arguments, str).join(' ')); if (was) was.apply(console, arguments); };
+          });
+          log('info', navigator.userAgent);
+        }
+
+        addEventListener('error', function (e) {
+          var el = e.target;
+          if (!el || !el.tagName) fail(e.message + ' @ ' + (e.filename || '?') + ':' + e.lineno);
+          else if (el.tagName === 'SCRIPT' || (el.tagName === 'LINK' && el.rel === 'stylesheet')) fail('Could not load ' + (el.src || el.href));
+        }, true);
+        addEventListener('unhandledrejection', function (e) { fail(e.reason); });
+        document.addEventListener('load', function (e) { if (e.target && e.target.tagName === 'SCRIPT') ran = true; }, true);
+
+        if (typeof WebSocket === 'undefined' || typeof fetch === 'undefined' || typeof BigInt === 'undefined') {
+          paint('Browser not supported', 'This app needs a more recent browser to run. Please update your browser or device software and try again.');
+        }
+
+        addEventListener('load', function () {
+          var since = Date.now();
+          watch = setInterval(function () {
+            if (shown()) {
+              if (over && over.parentNode) over.parentNode.removeChild(over);
+              over = null;
+              return clearInterval(watch);
+            }
+            var alive = ran || window.__ikonBundleRunning === true || !document.querySelector('script[type=module]');
+            var waited = Date.now() - since;
+            if (first || !alive) { if (waited >= 12000) paint('This app could not start', first ? 'Error: ' + first : 'The app bundle did not run.'); }
+            else if (waited >= 30000) paint('This app could not start', 'The page loaded but nothing rendered, and nothing was reported.');
+          }, 500);
+        });
+      })();
+    </script>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
