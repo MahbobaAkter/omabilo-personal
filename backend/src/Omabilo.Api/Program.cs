@@ -3,13 +3,15 @@
 // IKON service       → replacement here
 // sign-in (IKON auth) → Development: fictional "demo-…" users via the X-Demo-User header
 //                       Anything else: JWT bearer tokens from an identity provider you configure
-// persistent state    → IInvoiceStore: InMemory (tests) or a local SQLite file (development)
+// persistent state    → IInvoiceStore + IFinanceStore: InMemory (tests) or a local SQLite file (development)
 // UI streaming        → none: this is a JSON API for a future frontend
 
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HttpOverrides;
 using Omabilo.Api.Auth;
 using Omabilo.Api.Endpoints;
+using Omabilo.Api.Finance;
 using Omabilo.Api.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,6 +20,7 @@ var env = builder.Environment;
 
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddProblemDetails();
+builder.Services.AddSingleton(TimeProvider.System);
 
 // ── Storage ─────────────────────────────────────────────────────────────────
 var storage = config["Storage:Provider"] ?? "InMemory";
@@ -26,10 +29,12 @@ if (storage.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
 {
     var path = config["Storage:SqlitePath"] ?? Path.Combine("App_Data", "omabilo-dev.db");
     builder.Services.AddSingleton<IInvoiceStore>(_ => new SqliteInvoiceStore(path));
+    builder.Services.AddSingleton<IFinanceStore>(sp => new SqliteFinanceStore(path, sp.GetRequiredService<TimeProvider>()));
 }
 else if (storage.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddSingleton<IInvoiceStore, InMemoryInvoiceStore>();
+    builder.Services.AddSingleton<IFinanceStore, InMemoryFinanceStore>();
 }
 else
 {
@@ -81,7 +86,37 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     }
 }));
 
+// ── Behind a hosting proxy ───────────────────────────────────────────────────
+// Hosts end HTTPS at their proxy and forward plain HTTP with X-Forwarded-Proto/-For. Those
+// headers are believed ONLY from trusted proxies, or a client could fake "https" or its IP.
+// Default: only this machine. A deployment opts in with Proxy:TrustAllProxies (when the
+// container is reachable solely through the platform's proxy) or Proxy:KnownNetworks (CIDRs).
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    o.ForwardLimit = 1;
+
+    if (config.GetValue<bool>("Proxy:TrustAllProxies"))
+    {
+        o.KnownIPNetworks.Clear();
+        o.KnownProxies.Clear();
+    }
+
+    foreach (var cidr in config.GetSection("Proxy:KnownNetworks").Get<string[]>() ?? [])
+    {
+        if (!System.Net.IPNetwork.TryParse(cidr, out var network))
+        {
+            throw new InvalidOperationException($"Proxy:KnownNetworks entry '{cidr}' is not a network like 10.0.0.0/8.");
+        }
+
+        o.KnownIPNetworks.Add(network);
+    }
+});
+
 var app = builder.Build();
+
+// First, so every later step sees the browser's real scheme (https) and address
+app.UseForwardedHeaders();
 
 // Errors become plain problem responses: no stack traces or record contents leave the server
 app.UseExceptionHandler();
@@ -90,7 +125,9 @@ app.UseStatusCodePages();
 if (!app.Environment.IsDevelopment())
 {
     app.UseHsts();
-    app.UseHttpsRedirection();
+
+    // The host's health check calls the container directly over HTTP, so /health is not redirected
+    app.UseWhen(ctx => !ctx.Request.Path.StartsWithSegments("/health"), branch => branch.UseHttpsRedirection());
 }
 
 app.UseCors();
@@ -100,6 +137,7 @@ app.UseAuthorization();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", storage, auth = authMode.Length > 0 ? authMode : "Jwt" })).AllowAnonymous();
 app.MapInvoiceEndpoints();
 app.MapDemoEndpoints();
+app.MapFinanceEndpoints();
 
 app.Run();
 
