@@ -82,7 +82,7 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
 - a real `docker build`, or a deployment of the standalone `backend/` + `web/`
 - **real Google OAuth and real Gmail:** no OAuth client exists yet
 - a **real AI call:** AI is only tested with a fake model
-- **the live scheduler:** `ikon cron list --app-id 6ad2bf16644b301473e4962c` says "no active deployment" while `ikon deployment list` shows `f797189` active. After the next deploy, `/api/health` → `scheduledSync.lastRunUtc` shows whether the platform really fires the job.
+- **the live scheduler is verified:** after deploying `7d647f6`, `/api/health` showed the job ran on the live server at 2026-10-17 15:00:03 UTC (result: skipped, Gmail not configured). `ikon cron list/run --app-id` still wrongly says "no active deployment", which is a tool problem, not the app.
 - **a published privacy policy:** `/legal/privacy` currently serves the app shell, not a policy. `PRIVACY_DRAFT.md` needs the owner's details before it can become `legal/privacy.md`.
 - OCR for scanned PDFs (not implemented)
 - screen-reader testing

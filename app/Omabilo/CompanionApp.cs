@@ -37,7 +37,10 @@ public partial class OmabiloApp
             message => Log.Instance.Info(message));
     }
 
-    private string? SecretOrNull(string key) => app.Secrets.TryGet(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
+    // Trimmed: a pasted value can carry a space, a line break or (from PowerShell) a byte-order mark,
+    // and Google rejects a client id or secret with any of them
+    private string? SecretOrNull(string key) =>
+        app.Secrets.TryGet(key, out var value) && (value ?? "").Trim().Trim((char)0xFEFF).Trim() is { Length: > 0 } clean ? clean : null;
 
     /// <summary>Null until both Google secrets are set; the UI then says exactly what is missing.</summary>
     private GoogleOAuthConfig? GoogleConfig() =>
