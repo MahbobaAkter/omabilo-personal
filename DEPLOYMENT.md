@@ -17,7 +17,9 @@ iPhone / laptop ──https──▶ website (web/, on Vercel) ──https──
 
 1. **Sign-in.** Outside Development the API refuses to start without a real identity provider. The fictional demo users (`X-Demo-User`) work only on a Development server, never on a public one. **Needs your decision:** which provider to use. Free tiers exist (for example Microsoft Entra External ID or Auth0), but each needs an account you create.
 2. **Database.** The only stores today are in-memory (lost on restart) and a local SQLite file (one machine; most container hosts wipe it on redeploy). A hosted Postgres store has to be written behind `IInvoiceStore` and `IFinanceStore` first. **Needs your decision:** which Postgres host.
-3. **Container build untested.** `backend/Dockerfile` was written while Docker wasn't running, so it has never been built.
+3. **Website sign-in.** `web/` supports only demo sign-in or none. With a real provider it also needs a sign-in flow that gets an access token and sends it as `Authorization: Bearer …` (today it sends only `X-Demo-User`).
+4. **Running behind the host's HTTPS proxy.** Hosts end HTTPS at their proxy and pass plain HTTP to the container. The API doesn't read the forwarded headers yet (`UseForwardedHeaders` for `X-Forwarded-Proto`/`X-Forwarded-For`), and a Production run logged "Failed to determine the https port for redirect". Add that before deploying.
+5. **Docker image not built yet.** Docker Desktop is installed but hasn't finished its first-time setup on this PC (no Docker Linux environment exists under WSL), so `docker build` couldn't run. Instead, the Dockerfile's exact file list was copied to an empty folder and `dotnet publish -c Release` run on it. It built, and the published app passed the Production-mode checks (17 Oct 2026).
 
 ## Website on Vercel
 

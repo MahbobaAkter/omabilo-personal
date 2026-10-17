@@ -34,17 +34,20 @@ All data is fictional.
   Plus a server connection indicator and honest loading, empty, offline and error states.
 - **Deployment prep:** `backend/Dockerfile` (untested), `web/vercel.json`, `DEPLOYMENT.md`.
 
-## Uncommitted work (on `main`, after `1157de4`)
+## Recent commits and uncommitted work
 
-- **New:** `web/`, `backend/src/Omabilo.Api/Finance/`, the finance endpoints and tests, `backend/Dockerfile`, `DEPLOYMENT.md`, `DECISIONS.md`, `PROJECT_STATUS.md`
-- **Changed:** `backend/` invoice pay/unpay routes, `Program.cs`, `appsettings.Development.json` (local CORS), `backend/README.md`, `CLAUDE.md`, `.gitignore`
-- **Still uncommitted:** `frontend-node/package-lock.json` (npm churn, left out on purpose)
+- **`eca76bf`:** the website, per-user finance API, Dockerfile and deployment docs (local only).
+- **Uncommitted:**
+  - the new label tests in `FinanceCalculatorTests.cs`
+  - updates to `DEPLOYMENT.md` and `PROJECT_STATUS.md`
+  - `frontend-node/package-lock.json` (npm churn, left out on purpose)
 
 ## Last verified (17 Oct 2026)
 
-- `dotnet test backend/Omabilo.Backend.slnx`: 39 passed, before the last one-line change (the Finnish-style "18,00 €" label in `FinanceCalculator.cs`). Since that rebuild, Windows Application Control blocks the new `Omabilo.Api.dll`, so the suite can't load on this PC. **That line has no automated test result.**
+- `dotnet test backend/Omabilo.Backend.slnx`: **43 passed** on the current code, including 4 new tests for the Finnish "18,00 €" label. Windows Application Control blocked the rebuilt API once; on a later run Windows allowed it.
 - `dotnet test test/Omabilo.Test`: 36 passed.
-- `npm --prefix web test`: 15 passed.
+- `npm --prefix web test`: 15 passed. `npm audit`: 0 vulnerabilities.
+- **Docker build stage simulated:** the Dockerfile's exact files were published with `-c Release` in an empty folder. In Production mode the result refused to start without sign-in, served `/health`, returned 401 without a token or with `X-Demo-User`, and allowed only the configured CORS origin. The real `docker build` is still untested (Docker Desktop setup isn't finished).
 - `npm --prefix web run build`: type-check and build OK. The configured API address is built in, and no `localhost` address is.
 - IKON app build: 0 warnings, 0 errors.
 - In the browser against the running API:
@@ -55,7 +58,7 @@ All data is fictional.
   - with the API stopped, every screen shows "Can't reach the server" and no figures
 - CORS: the website's exact origin is allowed; another origin is refused.
 - **Untested:**
-  - the Docker image build (Docker Desktop wasn't running)
+  - a real `docker build` (Docker Desktop setup not finished)
   - any deployment
   - real sign-in
   - a hosted database
@@ -72,7 +75,7 @@ All data is fictional.
 
 ## Git
 
-- **`main`** is at `1157de4`.
+- **`main`** is at `eca76bf` (2 commits ahead of IKON).
 - **IKON (`origin`):** `26930ef`.
 - **GitHub (`github`):** `c8c1922` (a noreply snapshot of `1157de4`). Snapshot procedure: `DECISIONS.md`.
 

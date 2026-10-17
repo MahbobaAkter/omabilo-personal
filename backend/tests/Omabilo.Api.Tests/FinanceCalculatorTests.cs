@@ -57,6 +57,30 @@ public class FinanceCalculatorTests
         Assert.Contains(plan.Excluded, e => e.Label.StartsWith("Selling an old bike") && e.Reason.Contains("Not confirmed"));
     }
 
+    [Theory]
+    [InlineData(18, "Everyday spending (18,00 € a day × 8 days)")]
+    [InlineData(25.5, "Everyday spending (25,50 € a day × 8 days)")]
+    [InlineData(7.25, "Everyday spending (7,25 € a day × 8 days)")]
+    public void Everyday_spending_label_uses_finnish_number_style(double perDay, string expected)
+    {
+        var d = Seed();
+        d = d with { Settings = d.Settings with { DiscretionaryPerDay = (decimal)perDay } };
+
+        var line = FinanceCalculator.PlanUntilPayday(d, [], Today).Lines.Single(l => l.Group == "discretionary");
+
+        Assert.Equal(expected, line.Label);
+        Assert.Equal(-(decimal)perDay * 8, line.Amount);
+        Assert.DoesNotContain("€1", line.Label);   // never the English "€18.00" form
+    }
+
+    [Fact]
+    public void Everyday_spending_line_is_left_out_when_the_plan_is_zero()
+    {
+        var d = Seed();
+        d = d with { Settings = d.Settings with { DiscretionaryPerDay = 0 } };
+        Assert.DoesNotContain(FinanceCalculator.PlanUntilPayday(d, [], Today).Lines, l => l.Group == "discretionary");
+    }
+
     [Fact]
     public void An_invoice_replaces_the_matching_recurring_estimate()
     {
