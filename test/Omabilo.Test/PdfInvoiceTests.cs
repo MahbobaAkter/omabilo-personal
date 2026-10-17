@@ -351,6 +351,79 @@ public class PdfInvoiceTests
         }
     }
 
+    /// <summary>Shaped like a real forwarded payment-arrangement confirmation, with fictional details:
+    /// the table's headings and values are on separate lines, and it says reminders will NOT be sent.</summary>
+    private static string ArrangementBody(DateTime due) => $"""
+        ---------- Forwarded message ---------
+        From: Kuura Mobile <laskutus@kuuramobile.example>
+        Date: Wed, Sep 9, 2026 at 12:01 PM
+        Subject: Payment agreement
+
+        Thank you for your payment agreement.
+        New due date   Amount
+        {D(due)} 131,34
+        - Account number: FI21 1234 5600 0007 85
+        - Reference number: 1234561
+        If you don't pay the invoices on time, the payment arrangement will be canceled.
+        Please note that you will not get new invoices or payment reminders on the invoices that the payment arrangement concerns.
+        """;
+
+    [Fact]
+    public async Task A_payment_arrangement_is_a_bill_still_owed_not_a_reminder_or_a_payment()
+    {
+        var rig = await ConnectedAsync();
+        var due = rig.Now.Date.AddDays(34);
+        var pdf = LaidOutPdf((40, 800, "Kuura Mobile Oy"), (40, 786, "Y-tunnus 7654321-0"), (40, 760, "Payment agreement 53568257"),
+            (40, 740, "Accounts: FI21 1234 5600 0007 85   FI49 5000 1520 0001 23"));
+        rig.Google.Add("m-arr", PersonalSender, "Fwd: Payment agreement", ArrangementBody(due), rig.Now, files: [new FakeFile("Payment_agreement_1.pdf", "application/pdf", pdf)]);
+        await PushAsync(rig);
+
+        var item = Assert.Single(rig.Store.Items.Values);
+        Assert.Equal(FinKind.Invoice, item.Kind);
+        Assert.Equal(UserState.None, item.UserState);
+        Assert.StartsWith("Payment arrangement with", item.Title);
+        Assert.Equal(131.34m, item.Amount);
+        Assert.Equal(due, item.DueDate);
+        Assert.Equal("FI21 1234 5600 0007 85", item.Iban);
+        Assert.Equal("1234561", item.Reference);
+        Assert.DoesNotContain(item.Flags, f => f.Contains("bank account"));
+        Assert.Contains(item.Evidence, e => e.Contains("payment arrangement"));
+        Assert.Equal(DisplayStatus.Upcoming, ItemRules.StatusOf(item, rig.Now).Status is DisplayStatus.NeedsReview ? DisplayStatus.Upcoming : ItemRules.StatusOf(item, rig.Now).Status);
+        Assert.Contains(item.FieldSources, f => f.Field == "Due date" && f.Source == "Email text" && f.Confidence < 0.7);
+        Assert.Contains(item.FieldSources, f => f.Field == "Amount" && f.Source == "Email text");
+    }
+
+    [Fact]
+    public async Task A_paid_status_that_came_from_misreading_is_corrected_when_the_item_is_read_again()
+    {
+        var rig = await ConnectedAsync();
+        rig.Google.Add("m-arr", PersonalSender, "Fwd: Payment agreement", ArrangementBody(rig.Now.Date.AddDays(34)), rig.Now);
+        await PushAsync(rig);
+
+        // As the earlier rules saved it: a "paid" reminder
+        var current = rig.Store.Items.Values.Single();
+        await rig.Store.SaveItemAsync(current with { Kind = FinKind.PaymentReminder, UserState = UserState.ConfirmedPaid, AnalysisVersion = 2 }, default);
+
+        await rig.Engine.SyncAsync("alice", default);
+
+        var reread = rig.Store.Items[current.Id];
+        Assert.Equal(UserState.None, reread.UserState);
+        Assert.Equal(FinKind.Invoice, reread.Kind);
+    }
+
+    [Theory]
+    [InlineData("We have not received your payment. Please pay by the due date.", true, false)]
+    [InlineData("You will not get new invoices or payment reminders for these bills.", false, false)]
+    [InlineData("Thank you for your payment agreement. The new due date is below.", false, false)]
+    [InlineData("Thank you for your payment. Your invoice is now paid.", false, true)]
+    [InlineData("Contact us to agree on a payment arrangement if you can't pay. Payment reminder.", true, false)]
+    public void Negated_and_arrangement_wording_is_not_read_as_a_reminder_or_a_payment(string text, bool reminder, bool paid)
+    {
+        var e = InvoiceExplainer.Explain($"Subject: Invoice\n\n{text}\nAmount due: 10,00 €", new DateTime(2026, 10, 17));
+        Assert.Equal(reminder, e.IsReminder);
+        Assert.Equal(paid, e.SaysPaid);
+    }
+
     // ── The reader and the rules on their own ──
 
     [Fact]

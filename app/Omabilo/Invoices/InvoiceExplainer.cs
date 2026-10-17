@@ -35,6 +35,51 @@ public record InvoiceExplanation(
     public ExplainedField Field(string label) => Fields.First(f => f.Label == label);
 }
 
+/// <summary>Reading what a sentence actually says: "you will not get payment reminders" is not a
+/// reminder, and "thank you for your payment agreement" is not a payment.</summary>
+public static class MailWording
+{
+    /// <summary>A payment arrangement (maksusopimus): the company agreed a new date for earlier bills.
+    /// The money is still owed; it is neither a reminder nor a payment.</summary>
+    private static readonly Regex ArrangementRx = new(
+        @"(?i)(payment (?:agreement|arrangement)s?\b|maksusopimu|maksujärjestel|maksuaikasopimu|lisämaksuaika|eräpäivän siirto|due date extension)",
+        RegexOptions.Compiled);
+
+    // "Contact us to agree on a payment arrangement" offers one; it doesn't say one was made
+    private static readonly Regex OfferBeforeRx = new(
+        @"(?i)(?:agree on|ask (?:about|for)|request|apply for|set up|make|sopia|hakea|pyytää|tehdä)\s+(?:an?\s+)?(?:new\s+)?$", RegexOptions.Compiled);
+
+    private static readonly Regex NegationRx = new(@"(?i)\b(?:not|no|never|won't|will not|don't|do not|ei|et|emme|eivät)\b[^.!?\n]{0,50}$", RegexOptions.Compiled);
+    private static readonly Regex ArrangementAfterRx = new(@"^\s*(?:agreement|arrangement|plan)", RegexOptions.Compiled);
+
+    public static bool IsPaymentArrangement(string text) =>
+        ArrangementRx.Matches(text).Any(m => !OfferBeforeRx.IsMatch(text[Math.Max(0, m.Index - 40)..m.Index])
+            && !NegationRx.IsMatch(text[Math.Max(0, m.Index - 80)..m.Index].ToLowerInvariant()));
+
+    /// <summary>The phrase appears at least once in a sentence that isn't negated and isn't part of
+    /// "payment agreement / arrangement / plan". Expects lower-case text and phrase.</summary>
+    public static bool SaysAffirmatively(string lower, string phrase)
+    {
+        var i = 0;
+
+        while ((i = lower.IndexOf(phrase, i, StringComparison.Ordinal)) >= 0)
+        {
+            var before = lower[Math.Max(0, i - 80)..i];
+            var end = i + phrase.Length;
+            var after = lower[end..Math.Min(lower.Length, end + 14)];
+
+            if (!NegationRx.IsMatch(before) && !ArrangementAfterRx.IsMatch(after))
+            {
+                return true;
+            }
+
+            i = end;
+        }
+
+        return false;
+    }
+}
+
 public static class InvoiceExplainer
 {
     public const int MinLength = 20;
@@ -139,10 +184,12 @@ public static class InvoiceExplainer
         text = LabelsOnOwnLines.Replace(text.Replace("\r\n", "\n"), "\n");
         var lower = text.ToLowerInvariant();
         var extracted = TextInvoiceExtractor.Extract(text);
-        bool Has(IEnumerable<string> words) => words.Any(lower.Contains);
+        bool Has(IEnumerable<string> words) => words.Any(w => MailWording.SaysAffirmatively(lower, w));
 
-        var isReminder = Has(ReminderWords);
-        var saysPaid = Has(PaidWords);
+        // A payment arrangement moves the due date of a bill that is still unpaid
+        var arrangement = MailWording.IsPaymentArrangement(text);
+        var isReminder = !arrangement && Has(ReminderWords);
+        var saysPaid = !arrangement && Has(PaidWords);
         var allAmounts = MoneyRx.Matches(text)
             .Select(m => TextInvoiceExtractor.ParseAmount(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value))
             .OfType<decimal>()

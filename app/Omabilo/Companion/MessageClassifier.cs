@@ -43,7 +43,7 @@ public static class MessageClassifier
         {
             foreach (var term in rule.Terms)
             {
-                if (HasTerm(lower, term))
+                if (HasTerm(lower, term) && MailWording.SaysAffirmatively(lower, term))
                 {
                     // Words in the subject count double: they say what the message is about
                     var weight = HasTerm(subject.ToLowerInvariant(), term) ? rule.Weight * 2 : rule.Weight;
@@ -52,6 +52,15 @@ public static class MessageClassifier
                     break;
                 }
             }
+        }
+
+        // A payment arrangement sets a new date for bills still owed: a bill, not a reminder or a payment
+        if (MailWording.IsPaymentArrangement(all))
+        {
+            scores.Remove(FinKind.PaymentReminder);
+            scores.Remove(FinKind.PaymentConfirmation);
+            scores[FinKind.Invoice] = scores.GetValueOrDefault(FinKind.Invoice) + 4;
+            reasons.Add("confirms a payment arrangement (a new payment date for an earlier bill)");
         }
 
         var hasMoney = MoneyRx.IsMatch(all);

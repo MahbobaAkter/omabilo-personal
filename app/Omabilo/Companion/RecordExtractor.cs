@@ -115,6 +115,25 @@ public static class RecordExtractor
         }
 
         var due = e.DueDate ?? LabeledDate(text, DueLabels);
+
+        // "20.11.2026   131,34": one unlabelled row with a date and an amount, the way payment tables
+        // in emails read once their headings are on another line. Only used when nothing is labelled.
+        if (due == null && DateAmountRows(text) is [var row])
+        {
+            if (amount == null || amount == row.Amount)
+            {
+                due = row.Date;
+                guessed.Add("Due date");
+
+                if (amount == null)
+                {
+                    amount = row.Amount;
+                    guessed.Add("Amount");
+                    missing.RemoveAll(m => m.Contains("amount", StringComparison.OrdinalIgnoreCase));
+                }
+            }
+        }
+
         if (due != null) missing.RemoveAll(m => m.Contains("due date", StringComparison.OrdinalIgnoreCase));
 
         var invoiceDate = fields.InvoiceDate ?? LabeledDate(text, InvoiceDateLabels);
@@ -129,7 +148,8 @@ public static class RecordExtractor
         }
 
         var ibans = InvoiceAnalysis.Ibans(text);
-        var iban = ibans.FirstOrDefault(i => i.Valid).Iban;
+        var bodyAccounts = InvoiceAnalysis.Ibans(mail.BodyText).Where(i => i.Valid).Select(i => i.Iban.Replace(" ", "")).ToHashSet();
+        var iban = ibans.FirstOrDefault(i => i.Valid && bodyAccounts.Contains(i.Iban.Replace(" ", ""))).Iban ?? ibans.FirstOrDefault(i => i.Valid).Iban;
         foreach (var bad in ibans.Where(i => !i.Valid)) flags.Add($"The account number {bad.Iban} fails its check digits, so it may be mistyped. Don't pay to it until you've confirmed it with the company.");
         if (iban != null) missing.RemoveAll(m => m.Contains("IBAN", StringComparison.OrdinalIgnoreCase));
 
@@ -164,7 +184,8 @@ public static class RecordExtractor
         }
 
         var name = counterparty ?? "an unnamed company";
-        var title = item.Kind switch
+        var arrangement = MailWording.IsPaymentArrangement(text) || MailWording.IsPaymentArrangement(mail.Subject);
+        var title = arrangement ? $"Payment arrangement with {name}" : item.Kind switch
         {
             FinKind.PaymentReminder => $"Payment reminder from {name}",
             FinKind.DebtCollection => $"Collection notice from {name}",
@@ -183,6 +204,7 @@ public static class RecordExtractor
         var evidence = new List<string>();
         if (e.IsReminder) evidence.Add($"The sender says an earlier bill hasn't been paid ({InvoiceExplainer.Day(mail.ReceivedUtc)}).");
         if (e.SaysPaid) evidence.Add("The message says the payment was received.");
+        if (arrangement) evidence.Add("The company confirms a payment arrangement: a new date to pay earlier bills. The money is still owed until you pay it.");
 
         var read = mail.Attachments.Where(a => a.Status is AttachmentStatus.Read or AttachmentStatus.ReadByOcr).ToList();
         if (read.Count > 0) evidence.Add($"Read from the attached {string.Join(", ", read.Select(a => $"“{a.FileName}”"))} as well as the email.");
@@ -209,6 +231,19 @@ public static class RecordExtractor
             UserState = e.SaysPaid ? UserState.ConfirmedPaid : UserState.None,
         };
     }
+
+    private static readonly Regex DateAmountRowRx = new(
+        @"(?m)^\s*(\d{1,2}\.\d{1,2}\.\d{4})\s+(\d{1,3}(?:[  ]\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})\s*(?:€|eur)?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>Distinct rows that hold only a date and an amount.</summary>
+    private static List<(DateTime Date, decimal Amount)> DateAmountRows(string text) =>
+        DateAmountRowRx.Matches(text)
+            .Select(m => (Date: TextInvoiceExtractor.ParseDate(m.Groups[1].Value), Amount: TextInvoiceExtractor.ParseAmount(m.Groups[2].Value)))
+            .Where(x => x.Date != null && x.Amount != null)
+            .Select(x => (x.Date!.Value, x.Amount!.Value))
+            .Distinct()
+            .ToList();
 
     // ── Salary ──────────────────────────────────────────────────────────────
 

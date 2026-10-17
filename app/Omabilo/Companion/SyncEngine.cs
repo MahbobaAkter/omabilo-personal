@@ -1081,7 +1081,11 @@ public sealed class SyncEngine(
             Id = old.Id,
             CreatedUtc = old.CreatedUtc,
             UpdatedUtc = clock(),
-            UserState = old.UserState is UserState.None && fresh.UserState != UserState.None ? fresh.UserState : old.UserState,
+            UserState = old.UserState is UserState.None && fresh.UserState != UserState.None ? fresh.UserState
+                // "Confirmed paid" never comes from a button: without a payment confirmation email it came
+                // from reading this message, so the new reading decides
+                : old.UserState == UserState.ConfirmedPaid && !old.Sources.Any(s => s.Role == "payment confirmation") ? fresh.UserState
+                : old.UserState,
             UserNote = old.UserNote,
             Sources = old.Sources,
             PossibleDuplicateOf = old.PossibleDuplicateOf,

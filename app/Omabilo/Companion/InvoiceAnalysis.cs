@@ -14,7 +14,7 @@ public sealed record IssuerResult(string? Name, string Source, double Confidence
 public static class InvoiceAnalysis
 {
     /// <summary>Bumped when the reading rules change, so items read by older rules are read again once.</summary>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     // ── Segments ────────────────────────────────────────────────────────────
 
@@ -252,7 +252,7 @@ public static class InvoiceAnalysis
     {
         var inv = CultureInfo.InvariantCulture;
         yield return v.ToString("0.00", inv).Replace('.', ',');
-        yield return v.ToString("#,0.00", inv).Replace(",", " ").Replace('.', ',').Replace(" ", "");
+        yield return v.ToString("#,0.00", inv).Replace(",", " ").Replace('.', ',');
         yield return v.ToString("#,0.00", inv).Replace(",", "#").Replace('.', ',').Replace('#', '.');
         yield return v.ToString("0.00", inv);
         yield return v.ToString("#,0.00", inv);
@@ -269,17 +269,21 @@ public static class InvoiceAnalysis
         yield return d.ToString("d MMMM yyyy", inv);
     }
 
-    private static string Squash(string s) => Regex.Replace(s, @"[\s  ]+", "").ToLowerInvariant();
+    // Every kind of space (including the narrow no-break space mail clients use) becomes one space
+    private static string Spaces(string s) => Regex.Replace(s, @"[\s\u00a0\u202f\u2009]+", " ").ToLowerInvariant();
 
-    /// <summary>The first segment (documents first) that states this value, or null.</summary>
-    private static TextSegment? Where(List<TextSegment> segments, IEnumerable<string> forms)
+    /// <summary>The first segment (documents first) that states this value, or null. Numbers must stand
+    /// alone ("131,34" isn't found inside "2026131,34"); account numbers and references may be spaced differently.</summary>
+    private static TextSegment? Where(List<TextSegment> segments, IEnumerable<string> forms, bool spacingMayDiffer = false)
     {
-        var wanted = forms.Select(Squash).Where(f => f.Length > 0).Distinct().ToList();
-        return segments.FirstOrDefault(s =>
-        {
-            var squashed = Squash(s.Text);
-            return wanted.Any(w => Regex.IsMatch(squashed, $@"(?<![\d]){Regex.Escape(w)}(?![\d])"));
-        });
+        var wanted = forms.Select(Spaces).Where(f => f.Length > 0).Distinct().ToList();
+
+        bool Has(string text, string w) => Regex.IsMatch(text, $@"(?<![\d]){Regex.Escape(w)}(?![\d])");
+
+        return segments.FirstOrDefault(s => wanted.Any(w => Has(Spaces(s.Text), w)))
+            ?? (spacingMayDiffer
+                ? segments.FirstOrDefault(s => wanted.Any(w => Has(Spaces(s.Text).Replace(" ", ""), w.Replace(" ", ""))))
+                : null);
     }
 
     /// <summary>Records where each extracted field came from. A value read as "labelled" (the document
@@ -289,11 +293,11 @@ public static class InvoiceAnalysis
         var segments = Segments(mail);
         var list = new List<FieldProvenance>();
 
-        void Add(string field, string? value, IEnumerable<string> forms, string? note = null)
+        void Add(string field, string? value, IEnumerable<string> forms, string? note = null, bool spacingMayDiffer = false)
         {
             if (value == null) return;
             var labelled = !guessed.Contains(field);
-            var seg = Where(segments, forms);
+            var seg = Where(segments, forms, spacingMayDiffer);
 
             if (seg == null)
             {
@@ -313,9 +317,9 @@ public static class InvoiceAnalysis
         if (item.Amount is { } amount) Add("Amount", InvoiceExplainer.Money(amount), AmountForms(amount));
         if (item.DueDate is { } due) Add("Due date", Day(due), DateForms(due));
         if (item.InvoiceDate is { } issued) Add("Invoice date", Day(issued), DateForms(issued));
-        if (item.InvoiceNumber is { } number) Add("Invoice number", number, [number]);
-        if (item.Reference is { } reference) Add("Reference", reference, [reference]);
-        if (item.Iban is { } iban) Add("IBAN", iban, [iban]);
+        if (item.InvoiceNumber is { } number) Add("Invoice number", number, [number], spacingMayDiffer: true);
+        if (item.Reference is { } reference) Add("Reference", reference, [reference], spacingMayDiffer: true);
+        if (item.Iban is { } iban) Add("IBAN", iban, [iban], spacingMayDiffer: true);
         if (item.Vat is { } vat) Add("VAT", InvoiceExplainer.Money(vat), AmountForms(vat));
         if (item.Purpose is { } purpose) Add("What it's for", purpose, [purpose], guessed.Contains("What it's for") ? "Worked out from words in the message." : null);
         if (item.Gross is { } gross) Add("Gross salary", InvoiceExplainer.Money(gross), AmountForms(gross));
@@ -359,11 +363,14 @@ public static class InvoiceAnalysis
             }
         }
 
-        var accounts = parts.SelectMany(p => Ibans(p.Text).Where(i => i.Valid).Select(i => i.Iban.Replace(" ", ""))).Distinct().ToList();
+        // Companies often list several accounts (one per bank); only an email and a document that
+        // share none is worth a warning
+        var inBody = Ibans(body.Text).Where(i => i.Valid).Select(i => i.Iban.Replace(" ", "")).ToHashSet();
+        var inDocs = docs.SelectMany(d => Ibans(d.Text).Where(i => i.Valid).Select(i => i.Iban.Replace(" ", ""))).ToHashSet();
 
-        if (accounts.Count > 1)
+        if (inBody.Count > 0 && inDocs.Count > 0 && !inBody.Overlaps(inDocs))
         {
-            flags.Add($"The email and its documents give {accounts.Count} different bank accounts. Pay only to an account you can confirm with the company.");
+            flags.Add("The email and its attached document give different bank accounts. Pay only to an account you can confirm with the company.");
         }
 
         return flags;
