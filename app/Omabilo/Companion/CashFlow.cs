@@ -181,15 +181,15 @@ public static class CashFlowPlanner
 
         foreach (var i in open.Where(i => i.Kind == FinKind.DebtCollection && !i.Suspicious))
         {
-            list.Add(new($"Check the collection notice from {i.Counterparty}",
+            list.Add(new($"Check the collection notice from {i.Counterparty ?? "an unnamed company"}",
                 "Compare it with the original bill. If it's right but you can't pay, contact the agency about a payment plan. If it's wrong, dispute it in writing.", "warning", [i.Id]));
         }
 
         foreach (var i in open.Where(i => !i.Suspicious && i.DueDate!.Value.Date < today))
         {
             var days = (int)(today - i.DueDate!.Value.Date).TotalDays;
-            list.Add(new($"Review the overdue bill from {i.Counterparty}",
-                $"It was due {days} day{(days == 1 ? "" : "s")} ago and no payment is recorded. If you've paid it, mark it paid. If not, pay it or contact {i.Counterparty} to agree a new date.", "error", [i.Id]));
+            list.Add(new($"Review the overdue bill from {i.Counterparty ?? "an unnamed company"}",
+                $"It was due {days} day{(days == 1 ? "" : "s")} ago and no payment is recorded. If you've paid it, mark it paid. If not, pay it or contact {i.Counterparty ?? "the company"} to agree a new date.", "error", [i.Id]));
         }
 
         foreach (var i in open.Where(i => !i.Suspicious && i.DueDate!.Value.Date >= today && i.DueDate.Value.Date <= today.AddDays(3)))

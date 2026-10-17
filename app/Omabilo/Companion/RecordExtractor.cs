@@ -10,12 +10,15 @@ public static class RecordExtractor
 {
     public const int ExcerptLength = 800;
 
-    public static FinancialItem Extract(string userId, MailMessage mail, Classification c, DateTime today)
+    /// <param name="ownerEmail">The connected mailbox's own address: mail from it (a forwarded bill) is never
+    /// taken as coming from the biller.</param>
+    public static FinancialItem Extract(string userId, MailMessage mail, Classification c, DateTime today, string? ownerEmail = null)
     {
         var text = FullText(mail);
-        var sender = SenderName(mail.From);
+        var issuer = InvoiceAnalysis.FindIssuer(mail, ownerEmail);
         var now = DateTime.UtcNow;
-        var source = new SourceRef(mail.Id, mail.From, mail.Subject, mail.ReceivedUtc, Excerpt(text), "original");
+        var source = new SourceRef(mail.Id, mail.From, mail.Subject, mail.ReceivedUtc, Excerpt(text), "original",
+            mail.Attachments.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Text))?.FileName);
 
         var item = new FinancialItem
         {
@@ -26,18 +29,32 @@ public static class RecordExtractor
             ClassifiedBy = c.Method,
             ClassificationReasons = c.Reasons.ToList(),
             Sources = [source],
+            Attachments = mail.Attachments.Select(a => new AttachmentRecord(mail.Id, a.FileName, a.MimeType, a.Size, a.Status, a.Pages, a.Text?.Length ?? 0, a.Problem)).ToList(),
+            AnalysisVersion = InvoiceAnalysis.CurrentVersion,
             CreatedUtc = now,
             UpdatedUtc = now,
         };
 
+        var guessed = new HashSet<string>();
+
         item = c.Kind switch
         {
-            FinKind.Payslip or FinKind.Salary => ExtractSalary(item, text, sender, mail),
-            FinKind.Receipt or FinKind.Refund => ExtractReceipt(item, text, sender, mail),
-            FinKind.PaymentConfirmation => ExtractConfirmation(item, text, sender, mail),
-            FinKind.OtherFinancial => item with { Counterparty = sender, Title = mail.Subject.Length > 0 ? mail.Subject : $"Message from {sender}", EventDate = mail.ReceivedUtc.Date },
-            _ => ExtractBill(item, text, mail, today),
+            FinKind.Payslip or FinKind.Salary => ExtractSalary(item, text, issuer.Name, mail),
+            FinKind.Receipt or FinKind.Refund => ExtractReceipt(item, text, issuer.Name, mail),
+            FinKind.PaymentConfirmation => ExtractConfirmation(item, text, issuer.Name, mail),
+            FinKind.OtherFinancial => item with
+            {
+                Counterparty = issuer.Name,
+                Title = mail.Subject.Length > 0 ? mail.Subject : $"Message from {issuer.Name ?? SenderName(mail.From)}",
+                EventDate = mail.ReceivedUtc.Date,
+            },
+            _ => ExtractBill(item, mail, issuer, today, guessed),
         };
+
+        if (issuer.Name == null && c.Kind != FinKind.OtherFinancial && !item.Missing.Any(m => m.Contains("company", StringComparison.OrdinalIgnoreCase)))
+        {
+            item = item with { Missing = [.. item.Missing, $"The company isn't stated. {issuer.Note}"] };
+        }
 
         var currency = DetectCurrency(text);
         if (currency == null && (item.Amount ?? item.Net) != null)
@@ -45,52 +62,117 @@ public static class RecordExtractor
             item = item with { Missing = [.. item.Missing, "The currency isn't stated, so euros are assumed"] };
         }
 
-        return item with
+        // Attachments that couldn't be read leave the item less certain, and say so
+        var unread = mail.Attachments.Where(a => a.Status is not (AttachmentStatus.Read or AttachmentStatus.ReadByOcr or AttachmentStatus.NotSupported)).ToList();
+        if (unread.Count > 0)
+        {
+            item = item with
+            {
+                Confidence = Math.Min(item.Confidence, 0.65),
+                Missing = [.. item.Missing, .. unread.Select(a => $"The attachment “{a.FileName}” couldn't be read: {a.Problem ?? InvoiceAnalysis.StatusText(a.Status)}")],
+            };
+        }
+
+        item = item with
         {
             Currency = currency ?? "EUR",
             Category = Categorize(item.Kind, $"{mail.From} {mail.Subject} {text}", item.Counterparty),
         };
+
+        item = item with { FieldSources = InvoiceAnalysis.Provenance(item, mail, issuer, guessed) };
+        return item with { Advice = InvoiceAnalysis.Advise(item, today) };
     }
 
     // ── Bills ───────────────────────────────────────────────────────────────
 
-    private static FinancialItem ExtractBill(FinancialItem item, string text, MailMessage mail, DateTime today)
+    private static readonly string[] AmountLabels = ["amount due", "total due", "total to pay", "to pay", "maksettava yhteensä", "maksettava", "loppusumma", "yhteensä", "total", "summa", "euro"];
+    private static readonly string[] DueLabels = ["due date", "payment due", "pay by", "eräpäivä", "erääntymispäivä", "maksettava viimeistään", "förfallodag", "due"];
+    private static readonly string[] InvoiceDateLabels = ["invoice date", "date of invoice", "issue date", "laskun päiväys", "laskupäivä", "päiväys", "laskutuspäivä"];
+    private static readonly Regex NumberAnywhereRx = new(@"(?i)\b(?:invoice (?:no\.?|number|#)|laskun (?:numero|nro)|laskunumero|lasku nro)\s*[:#]?\s*(?=[A-Z0-9-]*\d)([A-Z0-9][A-Z0-9-]{2,})", RegexOptions.Compiled);
+    private static readonly Regex ReferenceAnywhereRx = new(@"(?i)\b(?:viitenumero|viitenro|viite|reference(?: number| no\.?)?|ref\.?\s?nr)\b\.?\s*[:/]?\s*(?:ref\.?\s?nr\.?\s*)?(RF\d{2}(?:\s?[0-9A-Z]{1,4}){1,7}|\d(?:\s?\d){3,24})", RegexOptions.Compiled);
+
+    private static FinancialItem ExtractBill(FinancialItem item, MailMessage mail, IssuerResult issuer, DateTime today, HashSet<string> guessed)
     {
-        var e = InvoiceExplainer.Explain($"From: {mail.From}\nSubject: {mail.Subject}\n\n{text}", today);
+        // Documents first: an attached invoice's labelled values win over the covering email's
+        var text = InvoiceAnalysis.BillText(mail);
+        var e = InvoiceExplainer.Explain($"Subject: {mail.Subject}\n\n{text}", today);
         var fields = TextInvoiceExtractor.Extract(text);
-        var counterparty = e.Field("Sender or company").Value ?? SenderName(mail.From);
+        var counterparty = issuer.Name;
         var flags = e.CheckBeforePaying.ToList();
-        var missing = e.MissingOrUncertain.ToList();
+
+        // The explainer judged the sender from the From line alone; the issuer finder replaces that
+        var missing = e.MissingOrUncertain.Where(m => !m.Contains("company name", StringComparison.OrdinalIgnoreCase) && !m.StartsWith("Who sent it", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var amount = e.Amount;
+        if (amount == null && LabeledAmount(text, AmountLabels) is { } labelledAmount)
+        {
+            amount = labelledAmount;
+            missing.RemoveAll(m => m.Contains("amount", StringComparison.OrdinalIgnoreCase));
+        }
+        else if (amount != null && e.Field("Amount").Source == FieldSource.Guessed)
+        {
+            guessed.Add("Amount");
+        }
+
+        var due = e.DueDate ?? LabeledDate(text, DueLabels);
+        if (due != null) missing.RemoveAll(m => m.Contains("due date", StringComparison.OrdinalIgnoreCase));
+
+        var invoiceDate = fields.InvoiceDate ?? LabeledDate(text, InvoiceDateLabels);
+        var invoiceNumber = fields.InvoiceNumber ?? (NumberAnywhereRx.Match(text) is { Success: true } nm ? nm.Groups[1].Value : null);
+
+        var reference = fields.Reference?.Trim();
+        if (reference == null && ReferenceAnywhereRx.Match(text) is { Success: true } rm)
+        {
+            reference = rm.Groups[1].Value.Trim();
+            missing.RemoveAll(m => m.Contains("reference", StringComparison.OrdinalIgnoreCase));
+            if (!PaymentReference.IsValid(reference)) flags.Add("The reference number's check digit doesn't add up, so it may be mistyped. Check it against the document.");
+        }
+
+        var ibans = InvoiceAnalysis.Ibans(text);
+        var iban = ibans.FirstOrDefault(i => i.Valid).Iban;
+        foreach (var bad in ibans.Where(i => !i.Valid)) flags.Add($"The account number {bad.Iban} fails its check digits, so it may be mistyped. Don't pay to it until you've confirmed it with the company.");
+        if (iban != null) missing.RemoveAll(m => m.Contains("IBAN", StringComparison.OrdinalIgnoreCase));
+
+        var vat = LabeledAmount(text, ["vat amount", "vat total", "alv yhteensä", "alv:n osuus", "vat", "alv", "arvonlisävero"]);
+        if (vat is { } v && amount is { } total && v >= total) vat = null;
 
         var originalDue = LabeledDate(text, ["original due date", "alkuperäinen eräpäivä"]);
         var period = Period(text);
-        var iban = Regex.Match(text, @"\bFI\d{2}(?:\s?\d{4}){3}\s?\d{2}\b", RegexOptions.IgnoreCase);
-        var instructions = iban.Success || e.Field("Reference number").Value != null
-            ? string.Join(" · ", new[] { iban.Success ? $"Account {iban.Value}" : null, e.Field("Reference number").Value is { } r ? $"reference {r}" : null }.OfType<string>())
+        var instructions = iban != null || reference != null
+            ? string.Join(" · ", new[] { iban != null ? $"Account {iban}" : null, reference != null ? $"reference {reference}" : null, due is { } d ? $"by {InvoiceExplainer.Day(d)}" : null }.OfType<string>())
             : null;
+
+        var purposeField = e.Field("What it's for");
+        if (purposeField.Source == FieldSource.Guessed) guessed.Add("What it's for");
 
         // Two different labelled totals is a conflict, not a choice to make silently
         string[] totalLabels = ["amount due", "total to pay", "total", "maksettava", "yhteensä", "summa"];
-        var labelled = totalLabels.SelectMany(l => LabeledAmounts(text, [l])).ToList();
-        if (labelled.Distinct().Count() > 1 && !e.IsReminder)
+        if (mail.Attachments.All(a => string.IsNullOrWhiteSpace(a.Text)))
         {
-            flags.Add($"The message gives different totals ({string.Join(", ", labelled.Distinct().Select(InvoiceExplainer.Money))}).");
+            var labelled = totalLabels.SelectMany(l => LabeledAmounts(text, [l])).ToList();
+            if (labelled.Distinct().Count() > 1 && !e.IsReminder)
+            {
+                flags.Add($"The message gives different totals ({string.Join(", ", labelled.Distinct().Select(InvoiceExplainer.Money))}).");
+            }
         }
 
-        if (e.DueDate is { } due && fields.InvoiceDate is { } issued && due < issued)
+        flags.AddRange(InvoiceAnalysis.Conflicts(mail));
+
+        if (due is { } dd && invoiceDate is { } issued && dd < issued)
         {
             flags.Add("The due date is before the invoice date.");
         }
 
+        var name = counterparty ?? "an unnamed company";
         var title = item.Kind switch
         {
-            FinKind.PaymentReminder => $"Payment reminder from {counterparty}",
-            FinKind.DebtCollection => $"Collection notice from {counterparty}",
-            FinKind.TaxNotice => $"Tax notice from {counterparty}",
-            FinKind.Subscription => $"Subscription charge from {counterparty}",
-            FinKind.Insurance => $"Insurance premium from {counterparty}",
-            FinKind.LoanInstalment => $"Loan instalment from {counterparty}",
-            _ => $"Invoice from {counterparty}",
+            FinKind.PaymentReminder => $"Payment reminder from {name}",
+            FinKind.DebtCollection => $"Collection notice from {name}",
+            FinKind.TaxNotice => $"Tax notice from {name}",
+            FinKind.Subscription => $"Subscription charge from {name}",
+            FinKind.Insurance => $"Insurance premium from {name}",
+            FinKind.LoanInstalment => $"Loan instalment from {name}",
+            _ => $"Invoice from {name}",
         };
 
         if (item.Kind == FinKind.DebtCollection)
@@ -102,21 +184,26 @@ public static class RecordExtractor
         if (e.IsReminder) evidence.Add($"The sender says an earlier bill hasn't been paid ({InvoiceExplainer.Day(mail.ReceivedUtc)}).");
         if (e.SaysPaid) evidence.Add("The message says the payment was received.");
 
+        var read = mail.Attachments.Where(a => a.Status is AttachmentStatus.Read or AttachmentStatus.ReadByOcr).ToList();
+        if (read.Count > 0) evidence.Add($"Read from the attached {string.Join(", ", read.Select(a => $"“{a.FileName}”"))} as well as the email.");
+
         return item with
         {
             Title = title,
             Counterparty = counterparty,
-            Purpose = e.Field("What it's for").Value,
-            InvoiceNumber = fields.InvoiceNumber,
-            Reference = fields.Reference,
-            Amount = e.Amount,
-            InvoiceDate = fields.InvoiceDate,
-            DueDate = e.DueDate,
+            Purpose = purposeField.Value,
+            InvoiceNumber = invoiceNumber,
+            Reference = reference,
+            Iban = iban,
+            Amount = amount,
+            Vat = vat,
+            InvoiceDate = invoiceDate,
+            DueDate = due,
             OriginalDueDate = originalDue,
             Period = period,
             PaymentInstructions = instructions,
             Flags = flags.Distinct().ToList(),
-            Missing = missing,
+            Missing = missing.Distinct().ToList(),
             Evidence = evidence,
             Suspicious = e.Urgency == Urgency.CheckFirst,
             UserState = e.SaysPaid ? UserState.ConfirmedPaid : UserState.None,
@@ -125,7 +212,7 @@ public static class RecordExtractor
 
     // ── Salary ──────────────────────────────────────────────────────────────
 
-    private static FinancialItem ExtractSalary(FinancialItem item, string text, string sender, MailMessage mail)
+    private static FinancialItem ExtractSalary(FinancialItem item, string text, string? sender, MailMessage mail)
     {
         var employer = LabeledText(text, ["employer", "työnantaja", "company"]) ?? sender;
         var gross = LabeledAmount(text, ["gross salary", "gross pay", "gross", "bruttopalkka", "brutto", "palkka yhteensä"]);
@@ -172,7 +259,7 @@ public static class RecordExtractor
 
         return item with
         {
-            Title = item.Kind == FinKind.Payslip ? $"Payslip from {employer}" : $"Salary from {employer}",
+            Title = item.Kind == FinKind.Payslip ? $"Payslip from {employer ?? "an unnamed employer"}" : $"Salary from {employer ?? "an unnamed employer"}",
             Counterparty = employer,
             Gross = gross,
             Net = net,
@@ -190,7 +277,7 @@ public static class RecordExtractor
 
     // ── Receipts ────────────────────────────────────────────────────────────
 
-    private static FinancialItem ExtractReceipt(FinancialItem item, string text, string sender, MailMessage mail)
+    private static FinancialItem ExtractReceipt(FinancialItem item, string text, string? sender, MailMessage mail)
     {
         var merchant = LabeledText(text, ["merchant", "seller", "store", "myyjä", "kauppa"]) ?? sender;
         var total = LabeledAmount(text, ["total paid", "amount paid", "total", "yhteensä", "summa", "veloitettu", "charged", "refund amount", "hyvitys"]);
@@ -210,7 +297,7 @@ public static class RecordExtractor
         var refund = item.Kind == FinKind.Refund;
         return item with
         {
-            Title = refund ? $"Refund from {merchant}" : $"Purchase at {merchant}",
+            Title = refund ? $"Refund from {merchant ?? "an unnamed shop"}" : merchant != null ? $"Purchase at {merchant}" : "Purchase (shop not stated)",
             Counterparty = merchant,
             Amount = total,
             Vat = vat,
@@ -222,13 +309,13 @@ public static class RecordExtractor
         };
     }
 
-    private static FinancialItem ExtractConfirmation(FinancialItem item, string text, string sender, MailMessage mail)
+    private static FinancialItem ExtractConfirmation(FinancialItem item, string text, string? sender, MailMessage mail)
     {
         var fields = TextInvoiceExtractor.Extract(text);
         var amount = fields.Amount ?? LabeledAmount(text, ["amount", "summa", "paid", "maksettu"]);
         return item with
         {
-            Title = $"Payment confirmation from {sender}",
+            Title = $"Payment confirmation from {sender ?? "an unnamed sender"}",
             Counterparty = sender,
             Amount = amount,
             InvoiceNumber = fields.InvoiceNumber,

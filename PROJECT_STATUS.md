@@ -1,6 +1,6 @@
 # Project status (handoff)
 
-Updated 17 Oct 2026. Read this first; details live in `DECISIONS.md` (why),
+Updated 17 Oct 2026 (PDF invoice processing). Read this first; details live in `DECISIONS.md` (why),
 `DEPLOYMENT.md` (how to deploy) and `ARCHITECTURE.md` (invoice audit and security plan).
 
 ## Goal
@@ -45,13 +45,23 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
   - Review the answers with `ikon db query "select * from omabilo_test_feedback order by created_utc"`.
 - **Connected companion (IKON app, "Your money"):**
   - **Sign-in and access:** IKON sign-in (Google, email code, passkey, guest). Gmail connects only as a separate, explicit step: OAuth code flow with PKCE and a one-time state, scope `gmail.readonly`, tokens encrypted with AES-256-GCM.
-  - **Gmail push (code deployed, Pub/Sub not set up yet):** `POST /api/gmail/push` accepts Pub/Sub notices (signed OIDC token or URL token), deduplicates them, and syncs only the named mailbox. Watches start after a sync, renew daily, and stop on disconnect. It needs the IKON secrets `GMAIL_PUBSUB_TOPIC` plus `GMAIL_PUSH_SERVICE_ACCOUNT` or `GMAIL_PUSH_TOKEN`; until then mailboxes are polled every 5 minutes.
+  - **Gmail push, verified live on 17 Oct 2026:** the watch started at 16:47 UTC. Three new messages (16:48–16:52) were each processed about 18 s after arrival from OIDC-authenticated Pub/Sub notices, with no Sync now and the hourly fallback not due. A reminder merged into its existing record, one message was kept as not financial, and a receipt was created. The records from emails sent from a personal account showed the sender's name as the company; fixed by the PDF and issuer work below.
+  - **Gmail push design:** `POST /api/gmail/push` accepts Pub/Sub notices (signed OIDC token or URL token), deduplicates them, and syncs only the named mailbox. Watches start after a sync, renew daily, and stop on disconnect. It needs the IKON secrets `GMAIL_PUBSUB_TOPIC` plus `GMAIL_PUSH_SERVICE_ACCOUNT` or `GMAIL_PUSH_TOKEN`; until then mailboxes are polled every 5 minutes.
   - **Sync:** a server-side sweep every 5 minutes (`[Cron]`; each mailbox every 5 minutes without push, hourly with an active watch) plus "Sync now". The first scan is bounded (90 days, 300 messages). After that, sync is incremental, with a rescan when Gmail's history expires, retries with backoff and a per-user lock.
   - **Reading mail:**
     - rule-based classification (English and Finnish)
     - extraction for invoices, reminders, collection notices, payslips, receipts and refunds
-    - local PDF text with PdfPig (no OCR)
     - duplicate and reminder merging; payment confirmations mark bills paid
+  - **PDF invoices (`Companion/InvoiceAnalysis.cs`, `PdfAttachmentReader.cs`, added 17 Oct 2026):**
+    - attachments are downloaded with the Gmail attachment API (or taken from the message when Gmail inlines them), read with PdfPig in reading order, and label rows are paired with value rows
+    - an email whose only content is a PDF is no longer dropped on its subject
+    - each attachment's outcome is saved: read, read by OCR, scanned (needs OCR), password-protected, damaged, too large, not supported, download failed or timed out. Passing failures retry 3 times (15 min doubling)
+    - OCR (Azure Document Intelligence, EU) only for people who turned on AI reading
+    - fields saved with their source and confidence: company, amount, VAT, invoice and due dates, invoice number, reference, IBAN (check digits verified), purpose
+    - the issuer comes from a labelled biller, a forwarded email's original sender, or the company name on the PDF, never from a personal or webmail sender's name
+    - conflicts between the email and its PDF are flagged; two different invoices in one email become two items
+    - plain-English, rule-based advice on the invoice screen (who, what, how much, when, status, next steps, checks), labelled "No AI"
+    - items read by older rules are re-read once automatically, keeping the person's edits
   - **Planning:** deterministic cash flow until payday (Finnish weekend paydays move to Friday), with each line labelled You entered, From email or Estimate. Suggestions explain why they were made.
   - **Month by month** (`Companion/MonthlySummary.cs`): six months of bills due, bills marked paid, receipts, refunds, payslip net pay and pay reported received, plus a salary history. Duplicates and "not for me" records never count; a payslip is never counted as money received.
   - **Health:** `GET /api/health` (public, no personal data) reports the database, which secrets are configured (yes/no only), the exact Google redirect URI this server uses, the scope, and the scheduled sync's last run. That run is recorded per server address in `om_job_runs`, so a local run never passes for the live scheduler.

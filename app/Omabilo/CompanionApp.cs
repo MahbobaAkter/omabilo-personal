@@ -34,7 +34,7 @@ public partial class OmabiloApp
         Log.Instance.Info($"companion: secrets present: {string.Join(", ", app.Secrets.Keys.Order())}");
         return new SyncEngine(Store, client, client, GoogleConfig, () => TokenProtector.FromBase64(SecretOrNull("OMABILO_TOKEN_KEY")),
             new PdfAttachmentReader(), EuAiAnalyzer.CreateOrNull(), new SyncOptions(), () => DateTime.UtcNow,
-            message => Log.Instance.Info(message), pushTopic: () => PushSettings()?.Topic);
+            message => Log.Instance.Info(message), pushTopic: () => PushSettings()?.Topic, ocr: EuDocumentOcr.CreateOrNull());
     }
 
     // ── Gmail push settings ─────────────────────────────────────────────────
@@ -428,4 +428,36 @@ public sealed class EuAiAnalyzer : IAiAnalyzer
             pass.Regions = [ModelRegion.Eu];
             pass.Temperature = 0.2;
         }, ct);
+}
+
+/// <summary>OCR for scanned PDFs and photos of bills, pinned to EU processing. The sync engine uses it
+/// only for people who turned on AI reading; it is null when the model isn't offered in the EU.</summary>
+public sealed class EuDocumentOcr(IReadOnlyList<ModelRegion> regions) : IDocumentOcr
+{
+    private const OCRModel Model = OCRModel.AzureDocumentIntelligence;
+
+    public string Name => $"{Model.DisplayName()} (EU)";
+
+    public static EuDocumentOcr? CreateOrNull()
+    {
+        try
+        {
+            var eu = OCR.GetSupportedRegions(Model)
+                .Where(r => r is ModelRegion.Eu or ModelRegion.EuNorth or ModelRegion.EuWest or ModelRegion.EuCentral or ModelRegion.EuSouth)
+                .ToList();
+            return eu.Count > 0 ? new EuDocumentOcr(eu) : null;
+        }
+        catch (Exception ex)
+        {
+            Log.Instance.Warning($"OCR region check failed: {ex.GetType().Name}");
+            return null;
+        }
+    }
+
+    public async Task<string> ReadAsync(byte[] data, string mimeType, CancellationToken ct)
+    {
+        using var ocr = new OCR(Model, regions);
+        var result = await ocr.AnalyzeDocumentAsync(new OCRConfig { Data = data, MimeType = mimeType, Pages = "1-5", Timeout = TimeSpan.FromSeconds(60) }, ct);
+        return result.Text ?? "";
+    }
 }

@@ -541,15 +541,18 @@ public class AttachmentReaderTests
     public async Task Text_pdfs_are_read_and_bad_or_huge_files_explained()
     {
         var reader = new PdfAttachmentReader();
-        var (text, problem) = await reader.ReadAsync("slip.pdf", "application/pdf", GmailSyncTests.Pdf("Nettopalkka 2 412,40 EUR\nPalkkapaiva 25.10.2026"), default);
-        Assert.Null(problem);
-        Assert.Contains("2 412,40", text);
+        var ok = await reader.ReadAsync("slip.pdf", "application/pdf", GmailSyncTests.Pdf("Nettopalkka 2 412,40 EUR\nPalkkapaiva 25.10.2026"), default);
+        Assert.Equal(AttachmentStatus.Read, ok.Status);
+        Assert.Null(ok.Problem);
+        Assert.Contains("2 412,40", ok.Text);
 
         var bad = await reader.ReadAsync("x.pdf", "application/pdf", Encoding.ASCII.GetBytes("<script>alert(1)</script>"), default);
+        Assert.Equal(AttachmentStatus.Damaged, bad.Status);
         Assert.Null(bad.Text);
         Assert.Contains("isn't a valid PDF", bad.Problem);
 
         var empty = await reader.ReadAsync("scan.pdf", "application/pdf", GmailSyncTests.Pdf(""), default);
+        Assert.Equal(AttachmentStatus.ScannedNotRead, empty.Status);
         Assert.Contains("scanned", empty.Problem);
     }
 }

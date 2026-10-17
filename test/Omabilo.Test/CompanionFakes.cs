@@ -177,7 +177,16 @@ public sealed class InMemoryCompanionStore : ICompanionStore
     }
 }
 
-public sealed record FakeMail(string Id, string From, string Subject, string Body, DateTime Received, long HistoryId, byte[]? Pdf = null, string? Html = null);
+public sealed record FakeMail(string Id, string From, string Subject, string Body, DateTime Received, long HistoryId, byte[]? Pdf = null, string? Html = null,
+    IReadOnlyList<FakeFile>? Files = null)
+{
+    /// <summary>The attachments: Files, or the single "document.pdf" the older tests pass as Pdf.</summary>
+    public IReadOnlyList<FakeFile> AllFiles => Files ?? (Pdf != null ? [new FakeFile("document.pdf", "application/pdf", Pdf)] : []);
+}
+
+/// <summary>An attachment. CarriedInMessage puts the bytes in the message (as Gmail does for small
+/// files) instead of behind an attachment id; Inline marks a picture in the email's layout.</summary>
+public sealed record FakeFile(string Name, string MimeType, byte[] Data, bool CarriedInMessage = false, bool Inline = false, long? ReportedSize = null);
 
 /// <summary>A stand-in for Google's token, revoke and Gmail endpoints, answering like the real ones.</summary>
 public sealed class FakeGoogle : HttpMessageHandler
@@ -189,6 +198,10 @@ public sealed class FakeGoogle : HttpMessageHandler
     public bool HistoryExpired;
     public string? RefreshError;
     public readonly Queue<HttpStatusCode> GmailFailures = new();
+
+    /// <summary>Errors returned for attachment downloads only, one per request.</summary>
+    public readonly Queue<HttpStatusCode> AttachmentFailures = new();
+    public int AttachmentDownloads;
 
     /// <summary>A raw error Google returns for the profile call, e.g. the Gmail API being disabled.</summary>
     public (int Status, string Body)? ProfileError;
@@ -211,8 +224,8 @@ public sealed class FakeGoogle : HttpMessageHandler
     public readonly List<string> Revoked = [];
     public readonly List<string> TokenRequests = [];
 
-    public void Add(string id, string from, string subject, string body, DateTime received, byte[]? pdf = null, string? html = null) =>
-        Mailbox.Add(new FakeMail(id, from, subject, body, received, ++HistoryCounter, pdf, html));
+    public void Add(string id, string from, string subject, string body, DateTime received, byte[]? pdf = null, string? html = null, IReadOnlyList<FakeFile>? files = null) =>
+        Mailbox.Add(new FakeMail(id, from, subject, body, received, ++HistoryCounter, pdf, html, files));
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
@@ -294,10 +307,17 @@ public sealed class FakeGoogle : HttpMessageHandler
 
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
-        if (parts is ["messages", var id, "attachments", _])
+        if (parts is ["messages", var id, "attachments", var attId])
         {
-            var mail = Mailbox.First(m => m.Id == id);
-            return Json(200, new { data = Pkce.Base64Url(mail.Pdf!), size = mail.Pdf!.Length });
+            AttachmentDownloads++;
+
+            if (AttachmentFailures.TryDequeue(out var attFailure))
+            {
+                return Json((int)attFailure, new { error = new { code = (int)attFailure, errors = new[] { new { reason = "backendError" } } } });
+            }
+
+            var file = Mailbox.First(m => m.Id == id).AllFiles[int.Parse(attId.Replace("att-", ""))];
+            return Json(200, new { data = Pkce.Base64Url(file.Data), size = file.Data.Length });
         }
 
         if (parts is ["messages", var mid])
@@ -305,7 +325,11 @@ public sealed class FakeGoogle : HttpMessageHandler
             var mail = Mailbox.FirstOrDefault(m => m.Id == mid);
             if (mail == null) return Json(404, new { error = new { code = 404, status = "NOT_FOUND" } });
 
-            var headers = new[] { new { name = "From", value = mail.From }, new { name = "Subject", value = mail.Subject }, new { name = "Date", value = mail.Received.ToString("R") } };
+            var headers = new[]
+            {
+                new { name = "From", value = mail.From }, new { name = "Subject", value = mail.Subject }, new { name = "Date", value = mail.Received.ToString("R") },
+                new { name = "Content-Type", value = mail.AllFiles.Count > 0 ? "multipart/mixed; boundary=\"b1\"" : "multipart/alternative; boundary=\"b0\"" },
+            };
             var meta = new { id = mail.Id, threadId = "t" + mail.Id, snippet = mail.Body[..Math.Min(120, mail.Body.Length)], internalDate = new DateTimeOffset(mail.Received).ToUnixTimeMilliseconds().ToString(), historyId = mail.HistoryId.ToString() };
 
             if (query["format"] == "metadata")
@@ -322,9 +346,13 @@ public sealed class FakeGoogle : HttpMessageHandler
                     : new { mimeType = "text/plain", filename = "", body = new { data = Pkce.Base64Url(Encoding.UTF8.GetBytes(mail.Body)), size = mail.Body.Length } },
             };
 
-            if (mail.Pdf != null)
+            for (var i = 0; i < mail.AllFiles.Count; i++)
             {
-                partsList.Add(new { mimeType = "application/pdf", filename = "document.pdf", body = new { attachmentId = "att-1", size = mail.Pdf.Length } });
+                var f = mail.AllFiles[i];
+                var partHeaders = new[] { new { name = "Content-Disposition", value = f.Inline ? $"inline; filename=\"{f.Name}\"" : $"attachment; filename=\"{f.Name}\"" } };
+                partsList.Add(f.CarriedInMessage
+                    ? new { mimeType = f.MimeType, filename = f.Name, headers = partHeaders, body = (object)new { data = Pkce.Base64Url(f.Data), size = f.ReportedSize ?? f.Data.Length } }
+                    : new { mimeType = f.MimeType, filename = f.Name, headers = partHeaders, body = (object)new { attachmentId = $"att-{i}", size = f.ReportedSize ?? f.Data.Length } });
             }
 
             return Json(200, new { meta.id, meta.threadId, meta.snippet, meta.internalDate, meta.historyId, payload = new { mimeType = "multipart/mixed", headers, parts = partsList } });
@@ -344,6 +372,20 @@ public sealed class FakeGoogle : HttpMessageHandler
 
     private static HttpResponseMessage Json(int status, object body) =>
         new((HttpStatusCode)status) { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
+}
+
+/// <summary>OCR that "reads" a scan by returning prepared text, or fails.</summary>
+public sealed class FakeOcr(string text, bool fail = false) : IDocumentOcr
+{
+    public int Calls;
+    public string Name => "fake-ocr";
+
+    public Task<string> ReadAsync(byte[] data, string mimeType, CancellationToken ct)
+    {
+        Calls++;
+        if (fail) throw new InvalidOperationException("ocr down");
+        return Task.FromResult(text);
+    }
 }
 
 public sealed class FakeAi(Func<string, AiRawAnalysis>? answer = null, bool fail = false) : IAiAnalyzer
@@ -378,12 +420,12 @@ public sealed class CompanionRig
 
     public string? PushTopic;
 
-    public CompanionRig(FakeAi? ai = null, SyncOptions? options = null)
+    public CompanionRig(FakeAi? ai = null, SyncOptions? options = null, IDocumentOcr? ocr = null, IAttachmentReader? reader = null)
     {
         Ai = ai;
         Client = new GoogleClient(new HttpClient(Google));
-        Engine = new SyncEngine(Store, Client, Client, () => Config, () => Keys, new PdfAttachmentReader(), ai, options ?? new SyncOptions(),
-            () => Now, Logs.Add, (_, _) => Task.CompletedTask, () => PushTopic);
+        Engine = new SyncEngine(Store, Client, Client, () => Config, () => Keys, reader ?? new PdfAttachmentReader(), ai, options ?? new SyncOptions(),
+            () => Now, Logs.Add, (_, _) => Task.CompletedTask, () => PushTopic, ocr);
         Service = new CompanionService(Store, Engine, () => Now);
     }
 

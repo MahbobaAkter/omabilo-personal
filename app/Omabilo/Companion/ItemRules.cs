@@ -184,9 +184,23 @@ public static class ItemRules
             Evidence = evidence,
             Missing = incoming.Missing.Where(m => existing.Missing.Contains(m)).ToList(),
             Sources = source == null || existing.Sources.Any(x => x.GmailId == source.GmailId) ? existing.Sources : [.. existing.Sources, source],
+            Iban = existing.Iban ?? incoming.Iban,
+            Vat = existing.Vat ?? incoming.Vat,
+            Attachments = MergeAttachments(existing.Attachments, incoming.Attachments),
+            FieldSources = MergeProvenance(existing.FieldSources, incoming.FieldSources),
             UpdatedUtc = now,
         };
     }
+
+    /// <summary>Both items' attachments, the newer outcome winning for the same file of the same email.</summary>
+    public static List<AttachmentRecord> MergeAttachments(List<AttachmentRecord> existing, List<AttachmentRecord> incoming) =>
+        existing.Where(e => !incoming.Any(i => i.GmailId == e.GmailId && i.FileName == e.FileName)).Concat(incoming).ToList();
+
+    /// <summary>Per field, the newer source when the newer email states it (a reminder's new amount), else the earlier one.</summary>
+    private static List<FieldProvenance> MergeProvenance(List<FieldProvenance> existing, List<FieldProvenance> incoming) =>
+        existing.Select(e => e.Field).Union(incoming.Select(i => i.Field))
+            .Select(f => incoming.FirstOrDefault(i => i.Field == f) ?? existing.First(e => e.Field == f))
+            .ToList();
 
     /// <summary>An item this one may duplicate without proof: flagged for the person, never merged.</summary>
     public static FinancialItem? FindProbableDuplicate(IEnumerable<FinancialItem> existing, FinancialItem incoming)

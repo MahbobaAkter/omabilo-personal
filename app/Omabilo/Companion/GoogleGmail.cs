@@ -15,9 +15,14 @@ public sealed record GoogleTokens(string AccessToken, DateTime ExpiresUtc, strin
 
 public sealed record GmailProfile(string EmailAddress, string HistoryId);
 
-public sealed record GmailMessageMeta(string Id, string ThreadId, string From, string Subject, DateTime ReceivedUtc, string Snippet, string? HistoryId);
+/// <summary>A message's headers. MayHaveAttachments comes from its Content-Type (multipart/mixed),
+/// so a message whose only content is a PDF is never dropped on its subject alone.</summary>
+public sealed record GmailMessageMeta(string Id, string ThreadId, string From, string Subject, DateTime ReceivedUtc, string Snippet, string? HistoryId,
+    bool MayHaveAttachments = false);
 
-public sealed record GmailAttachmentRef(string FileName, string MimeType, long Size, string AttachmentId);
+/// <summary>An attachment part: fetched by AttachmentId, or carried in the message (InlineData) when small.
+/// Inline parts (images in a signature or layout) are marked so they aren't mistaken for documents.</summary>
+public sealed record GmailAttachmentRef(string FileName, string MimeType, long Size, string AttachmentId, byte[]? InlineData = null, bool Inline = false);
 
 public sealed record GmailFullMessage(GmailMessageMeta Meta, string BodyText, IReadOnlyList<GmailAttachmentRef> Attachments);
 
@@ -201,7 +206,7 @@ public sealed class GoogleClient(HttpClient http) : IGoogleOAuth, IGmailApi
     public async Task<GmailMessageMeta> GetMetadataAsync(string accessToken, string id, CancellationToken ct)
     {
         using var doc = await GetJsonAsync(accessToken,
-            $"{GmailBase}/messages/{Uri.EscapeDataString(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date", ct);
+            $"{GmailBase}/messages/{Uri.EscapeDataString(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Content-Type", ct);
         return ParseMeta(doc.RootElement);
     }
 
@@ -375,6 +380,11 @@ public sealed class GoogleClient(HttpClient http) : IGoogleOAuth, IGmailApi
             return "";
         }
 
+        var contentType = Header("Content-Type");
+        var mayHaveAttachments = contentType.StartsWith("multipart/mixed", StringComparison.OrdinalIgnoreCase)
+            || contentType.StartsWith("application/", StringComparison.OrdinalIgnoreCase)
+            || contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
         var received = root.TryGetProperty("internalDate", out var d) && long.TryParse(d.GetString(), out var ms)
             ? DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime
             : DateTime.UtcNow;
@@ -386,7 +396,8 @@ public sealed class GoogleClient(HttpClient http) : IGoogleOAuth, IGmailApi
             Header("Subject"),
             received,
             root.TryGetProperty("snippet", out var s) ? WebUtility.HtmlDecode(s.GetString() ?? "") : "",
-            root.TryGetProperty("historyId", out var hid) ? hid.GetString() : null);
+            root.TryGetProperty("historyId", out var hid) ? hid.GetString() : null,
+            mayHaveAttachments);
     }
 
     private static void Walk(JsonElement part, StringBuilder plain, StringBuilder html, List<GmailAttachmentRef> attachments)
@@ -395,9 +406,21 @@ public sealed class GoogleClient(HttpClient http) : IGoogleOAuth, IGmailApi
         var fileName = part.TryGetProperty("filename", out var f) ? f.GetString() ?? "" : "";
         var body = part.TryGetProperty("body", out var b) ? b : default;
 
-        if (fileName.Length > 0 && body.ValueKind == JsonValueKind.Object && body.TryGetProperty("attachmentId", out var att))
+        if (fileName.Length > 0 && body.ValueKind == JsonValueKind.Object)
         {
-            attachments.Add(new GmailAttachmentRef(fileName, mime, body.TryGetProperty("size", out var size) ? size.GetInt64() : 0, att.GetString()!));
+            // A named part is a file even when Gmail carries it in the message rather than by attachment id
+            var size = body.TryGetProperty("size", out var sz) ? sz.GetInt64() : 0;
+            var inline = PartHeader(part, "Content-Disposition").StartsWith("inline", StringComparison.OrdinalIgnoreCase)
+                || PartHeader(part, "Content-ID").Length > 0;
+
+            if (body.TryGetProperty("attachmentId", out var att))
+            {
+                attachments.Add(new GmailAttachmentRef(fileName, mime, size, att.GetString()!, null, inline));
+            }
+            else if (body.TryGetProperty("data", out var inlineData) && inlineData.GetString() is { Length: > 0 } encodedFile)
+            {
+                attachments.Add(new GmailAttachmentRef(fileName, mime, size, "", Pkce.FromBase64Url(encodedFile), inline));
+            }
         }
         else if (body.ValueKind == JsonValueKind.Object && body.TryGetProperty("data", out var data) && data.GetString() is { Length: > 0 } encoded)
         {
@@ -420,6 +443,22 @@ public sealed class GoogleClient(HttpClient http) : IGoogleOAuth, IGmailApi
                 Walk(child, plain, html, attachments);
             }
         }
+    }
+
+    private static string PartHeader(JsonElement part, string name)
+    {
+        if (part.TryGetProperty("headers", out var headers) && headers.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var h in headers.EnumerateArray())
+            {
+                if (string.Equals(h.GetProperty("name").GetString(), name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return h.GetProperty("value").GetString() ?? "";
+                }
+            }
+        }
+
+        return "";
     }
 
     private static readonly Regex DropBlocks = new(@"(?is)<(script|style|head)[^>]*>.*?</\1>", RegexOptions.Compiled);

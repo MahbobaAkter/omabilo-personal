@@ -75,12 +75,51 @@ public sealed record MailMessage(
     string BodyText,
     IReadOnlyList<MailAttachment> Attachments);
 
-public sealed record MailAttachment(string FileName, string MimeType, long Size, string? Text, string? Problem);
+public sealed record MailAttachment(string FileName, string MimeType, long Size, string? Text, string? Problem,
+    AttachmentStatus Status = AttachmentStatus.Read, int Pages = 0);
+
+/// <summary>What happened to one attachment. Only Read and ReadByOcr mean its text was used.</summary>
+public enum AttachmentStatus
+{
+    Read,
+    ReadByOcr,
+    ScannedNotRead,
+    PasswordProtected,
+    Damaged,
+    TooLarge,
+    NotSupported,
+    DownloadFailed,
+    TimedOut,
+}
+
+/// <summary>An attachment as kept on an item: its name, size and outcome, never its content.</summary>
+public sealed record AttachmentRecord(string GmailId, string FileName, string MimeType, long Size, AttachmentStatus Status, int Pages, int TextLength, string? Problem)
+{
+    [JsonIgnore]
+    public bool WasRead => Status is AttachmentStatus.Read or AttachmentStatus.ReadByOcr;
+
+    /// <summary>A failure that can pass (network, timeout): worth another try later.</summary>
+    [JsonIgnore]
+    public bool CanRetry => Status is AttachmentStatus.DownloadFailed or AttachmentStatus.TimedOut;
+}
+
+/// <summary>Where one extracted value came from and how sure Omabilo is of it (0 to 1).</summary>
+public sealed record FieldProvenance(string Field, string Value, string Source, double Confidence, string? Note = null);
+
+/// <summary>Plain-English advice for a bill. Built by Omabilo's rules; Basis says so.</summary>
+public sealed record ItemAdvice(
+    string WhoAndWhat,
+    string AmountAndWhen,
+    string Situation,
+    List<string> NextSteps,
+    List<string> Checks,
+    string Basis,
+    DateTime CreatedUtc);
 
 public sealed record Classification(bool IsFinancial, FinKind Kind, double Confidence, IReadOnlyList<string> Reasons, string Method);
 
 /// <summary>Where an item came from, kept small: an excerpt, never the whole message.</summary>
-public sealed record SourceRef(string GmailId, string From, string Subject, DateTime ReceivedUtc, string Excerpt, string Role);
+public sealed record SourceRef(string GmailId, string From, string Subject, DateTime ReceivedUtc, string Excerpt, string Role, string? AttachmentName = null);
 
 public sealed record FinancialItem
 {
@@ -113,6 +152,25 @@ public sealed record FinancialItem
     public decimal? Vat { get; init; }
     public string? OrderRef { get; init; }
 
+    /// <summary>The account to pay to, as printed (spaces kept).</summary>
+    public string? Iban { get; init; }
+
+    /// <summary>Every attachment of the source emails and whether it could be read.</summary>
+    public List<AttachmentRecord> Attachments { get; init; } = [];
+
+    /// <summary>Where each extracted value came from (PDF, email text, sender) and how sure it is.</summary>
+    public List<FieldProvenance> FieldSources { get; init; } = [];
+
+    /// <summary>The rule-based advice saved when the item was read. The screen rebuilds it with today's date.</summary>
+    public ItemAdvice? Advice { get; init; }
+
+    /// <summary>Which version of the reading rules produced this item; older items are re-read once.</summary>
+    public int AnalysisVersion { get; init; }
+
+    /// <summary>Tries left and when to retry attachments that failed for a passing reason.</summary>
+    public int AttachmentRetries { get; init; }
+    public DateTime? AttachmentRetryAfterUtc { get; init; }
+
     public double Confidence { get; init; }
     public string ClassifiedBy { get; init; } = "rules";
     public List<string> ClassificationReasons { get; init; } = [];
@@ -136,6 +194,10 @@ public sealed record FinancialItem
     [JsonIgnore]
     public bool IsObligation => Kind is FinKind.Invoice or FinKind.PaymentReminder or FinKind.DebtCollection or FinKind.Subscription
         or FinKind.Insurance or FinKind.LoanInstalment or FinKind.TaxNotice && Amount is > 0 && DueDate != null;
+
+    [JsonIgnore]
+    public bool IsBill => Kind is FinKind.Invoice or FinKind.PaymentReminder or FinKind.DebtCollection or FinKind.Subscription
+        or FinKind.Insurance or FinKind.LoanInstalment or FinKind.TaxNotice;
 
     [JsonIgnore]
     public bool IsIncome => Kind is FinKind.Salary or FinKind.Payslip;

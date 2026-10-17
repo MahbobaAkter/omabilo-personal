@@ -767,6 +767,8 @@ public partial class OmabiloApp
                 && statuses[i.Id].Status is DisplayStatus.DueSoon or DisplayStatus.NeedsReview).ToList()),
             ("Needs verification", "shield-alert", snap.Items.Where(i => statuses[i.Id].NeedsReview).ToList()),
             ("Missing information", "circle-dashed", snap.Items.Where(i => i.Missing.Count > 0 && i.UserState is UserState.None).ToList()),
+            ("Documents Omabilo couldn't read", "file-warning", snap.Items.Where(i => i.UserState is UserState.None
+                && i.Attachments.Any(a => !a.WasRead && a.Status != AttachmentStatus.NotSupported)).ToList()),
             ("New since the previous sync", "sparkles", since is { } s ? snap.Items.Where(i => i.CreatedUtc > s).ToList() : []),
         };
 
@@ -1040,8 +1042,8 @@ public partial class OmabiloApp
                 row.Column(["gap-0.5 flex-1 min-w-0"], content: c =>
                 {
                     c.Text([compact ? Text.BodySm : Text.BodyStrong, "text-foreground truncate"], item.Title);
-                    c.Text([Text.Caption, "text-muted-foreground truncate"],
-                        item.DueDate is { } due ? $"Due {Day(due)} · {KindName(item.Kind)}" : item.EventDate is { } ev ? $"{Day(ev)} · {KindName(item.Kind)}" : KindName(item.Kind));
+                    var when = item.DueDate is { } due ? $"Due {Day(due)} · {KindName(item.Kind)}" : item.EventDate is { } ev ? $"{Day(ev)} · {KindName(item.Kind)}" : KindName(item.Kind);
+                    c.Text([Text.Caption, "text-muted-foreground truncate"], DocumentNote(item) is { } doc ? $"{when} · {doc}" : when);
                 });
 
                 row.Column(["items-end gap-1 shrink-0"], content: c =>
@@ -1054,6 +1056,16 @@ public partial class OmabiloApp
                     });
                 });
             });
+    }
+
+    /// <summary>"PDF read" or "PDF not read" for a list row, or null when the email had no documents.</summary>
+    private static string? DocumentNote(FinancialItem item)
+    {
+        var docs = item.Attachments.Where(a => a.Status != AttachmentStatus.NotSupported).ToList();
+        if (docs.Count == 0) return null;
+        var read = docs.Count(a => a.WasRead);
+        var word = docs.All(a => a.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)) ? "PDF" : "document";
+        return read == docs.Count ? $"{word}{(docs.Count > 1 ? "s" : "")} read" : read == 0 ? $"{word} not read" : $"{read} of {docs.Count} documents read";
     }
 
     private void RenderRecurring(UIView view, CompanionSnapshot snap)
@@ -1100,6 +1112,7 @@ public partial class OmabiloApp
                 {
                     var (label, tone) = StatusLook(status.Status);
                     col.Alert(label, tone: tone, description: status.Why + (status.ReviewReason != null ? $" Check: {status.ReviewReason}." : ""));
+                    RenderAdvice(col, item);
 
                     if (_myEditing.Value)
                     {
@@ -1138,6 +1151,7 @@ public partial class OmabiloApp
                     }
 
                     RenderAiExplanation(col, item);
+                    RenderDocuments(col, item, snap.Connection?.GoogleEmail);
                     RenderSources(col, item, snap.Connection?.GoogleEmail);
 
                     col.Text([Text.Caption, "text-muted-foreground"],
@@ -1163,15 +1177,30 @@ public partial class OmabiloApp
         }
     }
 
-    private static void FieldLine(UIView view, string label, string? value, bool edited = false)
+    private static void FieldLine(UIView view, string label, string? value, bool edited = false, FieldProvenance? source = null)
     {
         view.Row(["items-start gap-3 py-2 border-b border-secondary"], content: r =>
         {
             r.Text([Text.BodySm, "text-muted-foreground w-36 shrink-0"], label);
-            r.Text([Text.BodyStrong, value == null ? "text-muted-foreground italic flex-1 min-w-0 break-words" : "text-foreground flex-1 min-w-0 break-words"], value ?? "Not stated");
+            r.Column(["gap-0.5 flex-1 min-w-0"], content: c =>
+            {
+                c.Text([Text.BodyStrong, value == null ? "text-muted-foreground italic break-words" : "text-foreground break-words"], value ?? "Not stated");
+
+                if (value != null && !edited && source != null)
+                {
+                    c.Text([Text.Caption, source.Confidence < 0.7 ? "text-warning-700" : "text-muted-foreground"],
+                        $"From {LowerFirst(source.Source)} · {SureWord(source.Confidence)}{(source.Note != null ? $". {source.Note}" : "")}");
+                }
+            });
             if (edited) r.Badge("Corrected by you", tone: SemanticTone.Info, size: BadgeSize.Sm);
         });
     }
+
+    private static string LowerFirst(string s) => s.Length > 1 && char.IsUpper(s[0]) && !char.IsUpper(s[1]) ? char.ToLowerInvariant(s[0]) + s[1..] : s;
+
+    private static string SureWord(double c) => c >= 0.85 ? "high confidence" : c >= 0.7 ? "fairly sure" : c >= 0.5 ? "a best guess" : "uncertain";
+
+    private static FieldProvenance? Src(FinancialItem i, string field) => i.FieldSources.FirstOrDefault(f => f.Field == field);
 
     private void RenderItemFields(UIView view, FinancialItem i)
     {
@@ -1179,12 +1208,12 @@ public partial class OmabiloApp
 
         view.Column(["gap-0"], content: c =>
         {
-            FieldLine(c, i.IsIncome ? "Employer" : i.IsExpense ? "Merchant" : "Company", i.Counterparty, e.Contains(nameof(FinancialItem.Counterparty)));
+            FieldLine(c, i.IsIncome ? "Employer" : i.IsExpense ? "Merchant" : "Company", i.Counterparty, e.Contains(nameof(FinancialItem.Counterparty)), Src(i, "Company"));
 
             if (i.IsIncome)
             {
-                FieldLine(c, "Net salary", i.Net is { } n ? Money(n) : null, e.Contains(nameof(FinancialItem.Net)));
-                FieldLine(c, "Gross salary", i.Gross is { } g ? Money(g) : null);
+                FieldLine(c, "Net salary", i.Net is { } n ? Money(n) : null, e.Contains(nameof(FinancialItem.Net)), Src(i, "Net salary"));
+                FieldLine(c, "Gross salary", i.Gross is { } g ? Money(g) : null, source: Src(i, "Gross salary"));
                 FieldLine(c, "Tax withheld", i.Tax is { } t ? Money(t) : null);
                 FieldLine(c, "Other deductions", i.OtherDeductions is { } o ? Money(o) : null);
                 FieldLine(c, "Pay date", i.EventDate is { } d ? Day(d) : null, e.Contains(nameof(FinancialItem.EventDate)));
@@ -1198,24 +1227,26 @@ public partial class OmabiloApp
                 return;
             }
 
-            FieldLine(c, "Amount", i.Amount is { } a ? (i.Currency == "EUR" ? Money(a) : $"{a:0.00} {i.Currency}") : null, e.Contains(nameof(FinancialItem.Amount)));
+            FieldLine(c, "Amount", i.Amount is { } a ? (i.Currency == "EUR" ? Money(a) : $"{a:0.00} {i.Currency}") : null, e.Contains(nameof(FinancialItem.Amount)), Src(i, "Amount"));
 
             if (i.IsExpense)
             {
-                FieldLine(c, "Date", i.EventDate is { } d ? Day(d) : null, e.Contains(nameof(FinancialItem.EventDate)));
-                FieldLine(c, "VAT", i.Vat is { } vat ? Money(vat) : null);
+                FieldLine(c, "Date", i.EventDate is { } d ? Day(d) : null, e.Contains(nameof(FinancialItem.EventDate)), Src(i, "Date"));
+                FieldLine(c, "VAT", i.Vat is { } vat ? Money(vat) : null, source: Src(i, "VAT"));
                 FieldLine(c, "Order or receipt no.", i.OrderRef);
             }
             else
             {
-                FieldLine(c, "What it's for", i.Purpose, e.Contains(nameof(FinancialItem.Purpose)));
-                FieldLine(c, "Due date", i.DueDate is { } due ? Day(due) : null, e.Contains(nameof(FinancialItem.DueDate)));
+                FieldLine(c, "What it's for", i.Purpose, e.Contains(nameof(FinancialItem.Purpose)), Src(i, "What it's for"));
+                FieldLine(c, "Due date", i.DueDate is { } due ? Day(due) : null, e.Contains(nameof(FinancialItem.DueDate)), Src(i, "Due date"));
                 if (i.OriginalDueDate is { } od) FieldLine(c, "Original due date", Day(od));
-                FieldLine(c, "Invoice number", i.InvoiceNumber);
-                FieldLine(c, "Reference", i.Reference, e.Contains(nameof(FinancialItem.Reference)));
-                FieldLine(c, "Invoice date", i.InvoiceDate is { } idt ? Day(idt) : null);
+                FieldLine(c, "Invoice number", i.InvoiceNumber, source: Src(i, "Invoice number"));
+                FieldLine(c, "Reference", i.Reference, e.Contains(nameof(FinancialItem.Reference)), Src(i, "Reference"));
+                FieldLine(c, "Account (IBAN)", i.Iban, source: Src(i, "IBAN"));
+                FieldLine(c, "VAT", i.Vat is { } vat ? Money(vat) : null, source: Src(i, "VAT"));
+                FieldLine(c, "Invoice date", i.InvoiceDate is { } idt ? Day(idt) : null, source: Src(i, "Invoice date"));
                 FieldLine(c, "Billing period", i.Period);
-                FieldLine(c, "Payment details", i.PaymentInstructions);
+                FieldLine(c, "How to pay", i.PaymentInstructions);
             }
 
             FieldLine(c, "Category", i.Category, e.Contains(nameof(FinancialItem.Category)));
@@ -1293,6 +1324,91 @@ public partial class OmabiloApp
             List("Suggested next steps", ai.NextSteps);
             if (ai.WhyFinancial.Length > 0) c.Text([Text.Caption, "text-muted-foreground"], $"Why it's financial: {ai.WhyFinancial}");
             if (ai.Basis.Length > 0) c.Text([Text.Caption, "text-muted-foreground"], $"Based on: {ai.Basis}");
+        });
+    }
+
+    /// <summary>Omabilo's own advice for a bill, rebuilt with today's date so "overdue" stays true.</summary>
+    private static void RenderAdvice(UIView view, FinancialItem item)
+    {
+        if (InvoiceAnalysis.Advise(item, DateTime.UtcNow) is not { } advice)
+        {
+            return;
+        }
+
+        view.Box([Card.Elevated, "p-4 flex flex-col gap-2"], content: c =>
+        {
+            c.Row(["items-center gap-2"], content: r =>
+            {
+                r.Icon([Icon.Sm, "text-brand-secondary"], name: "lightbulb");
+                r.Text([Text.Label, "text-foreground"], "What this is and what to do");
+            });
+            c.Text([Text.Body, "text-foreground"], advice.WhoAndWhat);
+            c.Text([Text.BodyStrong, "text-foreground"], advice.AmountAndWhen);
+            c.Text([Text.BodySm, "text-muted-foreground"], advice.Situation);
+
+            if (advice.NextSteps.Count > 0)
+            {
+                c.Text([Text.Caption, "text-muted-foreground pt-1"], "Next steps");
+                foreach (var step in advice.NextSteps) c.Text([Text.BodySm, "text-foreground"], $"• {step}");
+            }
+
+            if (advice.Checks.Count > 0)
+            {
+                c.Text([Text.Caption, "text-muted-foreground pt-1"], "Check before relying on it");
+                foreach (var check in advice.Checks.Take(6)) c.Text([Text.BodySm, "text-foreground/90"], $"• {check}");
+            }
+
+            c.Text([Text.Caption, "text-muted-foreground pt-1"], advice.Basis);
+        });
+    }
+
+    /// <summary>Each attachment of the source emails: whether Omabilo could read it, and why not.</summary>
+    private static void RenderDocuments(UIView view, FinancialItem item, string? gmailAccount)
+    {
+        if (item.Attachments.Count == 0)
+        {
+            view.Text([Text.Caption, "text-muted-foreground"],
+                item.AnalysisVersion >= InvoiceAnalysis.CurrentVersion
+                    ? "Documents: the email had no attachments, so this was read from the email text."
+                    : "Documents: not checked yet. Omabilo re-reads older items automatically on the next sync.");
+            return;
+        }
+
+        view.Column(["gap-2"], content: c =>
+        {
+            c.Text([Text.Label, "text-foreground"], item.Attachments.Count == 1 ? "Document" : $"Documents ({item.Attachments.Count})");
+
+            foreach (var a in item.Attachments)
+            {
+                var statusText = InvoiceAnalysis.StatusText(a.Status);
+
+                c.Box(["rounded-xl border border-secondary p-3 flex flex-col gap-1"], key: $"doc-{a.GmailId}-{a.FileName}", content: b =>
+                {
+                    b.Row(["items-center justify-between gap-2 flex-wrap"], content: r =>
+                    {
+                        r.Row(["items-center gap-2 min-w-0"], content: n =>
+                        {
+                            n.Icon([Icon.Sm, "text-muted-foreground"], name: a.WasRead ? "file-check" : "file-x");
+                            n.Text([Text.BodySm, "text-foreground font-semibold truncate"], a.FileName);
+                        });
+                        r.Badge(char.ToUpperInvariant(statusText[0]) + statusText[1..],
+                            tone: a.WasRead ? SemanticTone.Success : a.Status == AttachmentStatus.NotSupported ? SemanticTone.Neutral : SemanticTone.Warning, size: BadgeSize.Sm);
+                    });
+
+                    var facts = new List<string> { a.Size > 0 ? $"{Math.Max(1, a.Size / 1024)} KB" : "size unknown" };
+                    if (a.Pages > 0) facts.Add($"{a.Pages} page{(a.Pages == 1 ? "" : "s")}");
+                    if (a.WasRead) facts.Add($"{a.TextLength:N0} characters of text read");
+                    b.Text([Text.Caption, "text-muted-foreground"], string.Join(" · ", facts));
+
+                    if (a.Problem != null) b.Text([Text.BodySm, a.WasRead ? "text-muted-foreground" : "text-foreground"], a.Problem);
+                    if (item.AttachmentRetryAfterUtc is { } retry && a.CanRetry) b.Text([Text.Caption, "text-muted-foreground"], $"Next automatic try after {retry:HH:mm} UTC.");
+
+                    var link = gmailAccount != null
+                        ? $"https://mail.google.com/mail/?authuser={Uri.EscapeDataString(gmailAccount)}#all/{Uri.EscapeDataString(a.GmailId)}"
+                        : $"https://mail.google.com/mail/#all/{Uri.EscapeDataString(a.GmailId)}";
+                    b.Link(["text-brand-secondary underline text-sm self-start"], text: "Open the email with this file in Gmail", href: link, target: "_blank", rel: "noopener noreferrer");
+                });
+            }
         });
     }
 
@@ -1428,9 +1544,9 @@ public partial class OmabiloApp
                 card.TextField(label: "First scan looks back (days)", bind: _sScanDays, type: "number", min: "7", step: "1");
                 card.Column(["gap-2"], content: ai =>
                 {
-                    ai.Switch(bind: _sAi, label: "Explain my financial emails with AI");
+                    ai.Switch(bind: _sAi, label: "Explain my financial emails with AI and read scanned bills");
                     ai.AiDisclosure(AiDisclosureKind.Interaction, text:
-                        "When this is on, Omabilo sends a shortened copy of each financial email (account numbers, identity codes, card numbers, email addresses and phone numbers removed) to an AI model, Claude Haiku, through the IKON platform with processing pinned to the EU. It writes plain-English explanations only. Amounts, dates and statuses always come from Omabilo's own rules.");
+                        "When this is on, Omabilo sends a shortened copy of each financial email (account numbers, identity codes, card numbers, email addresses and phone numbers removed) to an AI model, Claude Haiku, through the IKON platform with processing pinned to the EU. It writes plain-English explanations only. Scanned PDFs and photos of bills, which have no text Omabilo can read itself, are sent whole to an OCR service (Azure Document Intelligence, also through IKON in the EU) to turn them into text. Amounts, dates and statuses always come from Omabilo's own rules.");
                     ai.Text([Text.Caption, "text-muted-foreground"], "Off by default. Turning it off stops new AI processing; explanations already made stay until you delete the items.");
                 });
 
