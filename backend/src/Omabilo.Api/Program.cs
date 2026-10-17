@@ -57,7 +57,7 @@ else
         $"Unknown Storage:Provider '{storage}'. Use Postgres, Sqlite or InMemory.");
 }
 
-// ── Sign-in: fail closed ────────────────────────────────────────────────────
+// ── Authentication ──────────────────────────────────────────────────────────
 var authMode = config["Auth:Mode"] ?? "";
 
 if (authMode.Equals("Demo", StringComparison.OrdinalIgnoreCase))
@@ -71,6 +71,12 @@ if (authMode.Equals("Demo", StringComparison.OrdinalIgnoreCase))
     builder.Services.AddAuthentication(DemoUserAuthenticationHandler.SchemeName)
         .AddScheme<AuthenticationSchemeOptions, DemoUserAuthenticationHandler>(
             DemoUserAuthenticationHandler.SchemeName, _ => { });
+}
+else if (authMode.Equals("Staging", StringComparison.OrdinalIgnoreCase))
+{
+    // Restricted deployment mode. No authentication scheme is configured.
+    // The middleware below permits only the health endpoint.
+    builder.Services.AddAuthentication();
 }
 else
 {
@@ -95,7 +101,7 @@ else
 
 builder.Services.AddAuthorization();
 
-// ── Browser access for a future frontend ─────────────────────────────────────
+// ── Browser access ───────────────────────────────────────────────────────────
 var origins = config.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
@@ -133,7 +139,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 
 var app = builder.Build();
 
-// Initialize the PostgreSQL schema before accepting requests.
+// ── Initialize PostgreSQL before accepting requests ──────────────────────────
 if (storage.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
 {
     var connectionString = config.GetConnectionString("Postgres")
@@ -143,7 +149,7 @@ if (storage.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
     await PostgresDatabaseInitializer.InitializeAsync(connectionString);
 }
 
-// First, so later middleware sees the forwarded scheme and address.
+// ── Middleware ───────────────────────────────────────────────────────────────
 app.UseForwardedHeaders();
 
 app.UseExceptionHandler();
@@ -153,9 +159,10 @@ if (!app.Environment.IsDevelopment())
 {
     app.UseHsts();
 
-    // The hosting platform may call the health endpoint directly over HTTP.
+    // Hosting health checks may arrive over HTTP.
     app.UseWhen(
-        ctx => !ctx.Request.Path.StartsWithSegments("/health"),
+        ctx => !ctx.Request.Path.Equals(
+            "/health", StringComparison.OrdinalIgnoreCase),
         branch => branch.UseHttpsRedirection());
 }
 
@@ -163,6 +170,27 @@ app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// In staging, allow only /health. Reject every other path, including
+// invoice, finance, demo, and unknown endpoints.
+if (authMode.Equals("Staging", StringComparison.OrdinalIgnoreCase))
+{
+    app.UseWhen(
+        ctx => !ctx.Request.Path.Equals(
+            "/health", StringComparison.OrdinalIgnoreCase),
+        branch => branch.Run(async context =>
+        {
+            context.Response.StatusCode =
+                StatusCodes.Status503ServiceUnavailable;
+
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "staging_restricted",
+                message = "This API is restricted during staging. Authentication is not configured."
+            });
+        }));
+}
+
+// ── Health check ─────────────────────────────────────────────────────────────
 app.MapGet(
     "/health",
     () => Results.Ok(new
@@ -173,6 +201,7 @@ app.MapGet(
     }))
     .AllowAnonymous();
 
+// ── API endpoints ────────────────────────────────────────────────────────────
 app.MapInvoiceEndpoints();
 app.MapDemoEndpoints();
 app.MapFinanceEndpoints();
