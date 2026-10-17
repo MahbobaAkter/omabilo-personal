@@ -89,3 +89,57 @@ These are not done yet. Don't call the service secure until they are:
 - a retention policy
 
 Invoice export and delete-all already exist in the API.
+
+## Connected companion on IKON (Gmail)
+
+The connected companion (sign-in, Gmail, sync, AI and the "Your money" screens) runs in the IKON
+app itself, so it needs no Vercel or container settings. It needs **IKON secrets**, set from the app
+folder. Values are prompted for and never shown; don't put them in files, chat or Git.
+
+| Secret | What it is | Set? |
+|---|---|---|
+| `OMABILO_TOKEN_KEY` | Base64 of 32 random bytes; encrypts Google tokens (AES-256-GCM) | Set 17 Oct 2026 |
+| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client id from Google Cloud | **You** |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret from Google Cloud | **You** |
+
+Rotating `OMABILO_TOKEN_KEY` makes stored Google tokens unreadable. Everyone then has to reconnect
+Gmail, and nothing else is lost.
+
+### Google Cloud steps (you do these; about 20 minutes)
+
+1. **Create the project.** Go to <https://console.cloud.google.com/>, then **Select a project → New project**. Name it `Omabilo`.
+2. **Enable the Gmail API.** Go to **APIs & Services → Library**, search for "Gmail API" and click **Enable**.
+3. **Set up the consent screen** under **APIs & Services → OAuth consent screen** (in newer consoles: **Google Auth Platform → Branding / Audience / Data access**):
+   - User type: **External**. Publishing status: leave it on **Testing**.
+   - App name **Omabilo**, your support email, and these links:
+     - home page `https://omabilo-2143f1e7.ikonai.app`
+     - privacy policy `https://omabilo-2143f1e7.ikonai.app/legal/privacy`
+   - Under **Data access → Add or remove scopes**, add only `https://www.googleapis.com/auth/gmail.readonly`.
+   - Under **Audience → Test users**, add the Gmail addresses of your test accounts. Use a dedicated test Gmail, not your personal inbox. Testing mode allows up to 100 test users.
+4. **Create the OAuth client.** Go to **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+   - Application type: **Web application**. Name: `Omabilo IKON`.
+   - **Authorized redirect URIs**: `https://omabilo-2143f1e7.ikonai.app/api/oauth/google/callback`. To test a local `ikon run` as well, also add `https://localhost:9443/api/oauth/google/callback`.
+   - Click **Create**. Copy the client id and secret straight into the commands below, not into chat or a file.
+5. **Store them in IKON.** From `C:\Users\akter\Omabilo`, run these in a terminal. Each one prompts for the value and masks it:
+
+   ```bash
+   ikon secret set GOOGLE_OAUTH_CLIENT_ID
+   ```
+
+   ```bash
+   ikon secret set GOOGLE_OAUTH_CLIENT_SECRET
+   ```
+
+6. **Restart the app so it reads the secrets.** A deployed app reads them when an instance starts: deploy again, or wait for the next cold start. For a local run, use `ikon stop`, then `ikon run --detach`.
+7. **Verify the connection:**
+   1. Sign in to the live app with a test-user Google account. Go to **Connections & privacy → Connect Gmail**.
+   2. Google's screen should name Omabilo and ask only to "Read your email messages and settings".
+   3. After you allow it, you return to a "Gmail connected" page. "My money" then shows "Looking for financial messages…", followed by results within a few minutes.
+   4. Check the logs with `ikon logs --level info`. Expect `scheduled gmail sync` every 15 minutes, and never any message text.
+
+### Before people outside your test list
+
+- **Google verification:** `gmail.readonly` is a *restricted* scope. Leaving Testing mode needs Google's app verification and an annual third-party security assessment (CASA). Plan weeks for this, with cost depending on the assessor.
+- **Testing mode tokens expire:** refresh tokens expire after **7 days** in Testing mode. Testers then see "Reconnect Gmail", which is expected.
+- **Privacy policy:** the page at `/legal/privacy` must describe Gmail use, including Google's "Limited Use" requirements. A factual draft is in `PRIVACY_DRAFT.md`; review it and save it as `legal/privacy.md`.
+- **AI processing:** before turning AI on with real email, confirm IKON's data-processing terms for AI calls. The app pins calls to the EU, removes account numbers and identifiers, and asks each person for opt-in.

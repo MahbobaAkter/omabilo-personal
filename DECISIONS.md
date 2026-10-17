@@ -6,7 +6,7 @@ Each entry is a choice that would be costly to undo or rediscover.
 
 - **IKON is the runtime and the host.** Screens are C# streamed by the IKON server; `frontend-node` is only a viewer for it. Static hosts (Vercel, Netlify, GitHub Pages) cannot run the app.
 - **One instance per user** (`SessionIdentity(UserId)`) in the cloud; a local run is one shared instance.
-- **Fictional data only** until the Phase 2 security items in `ARCHITECTURE.md` are done.
+- **Fictional data only** until the Phase 2 security items in `ARCHITECTURE.md` are done. *Superseded 17 Oct 2026 for the connected companion below: real Gmail data is in scope, for signed-in users who connect it.*
 
 ## Invoices
 
@@ -48,6 +48,31 @@ Each entry is a choice that would be costly to undo or rediscover.
   - or `Proxy:KnownNetworks` CIDRs
 
   The default trusts nothing outside the container, because a trusted fake header could make plain HTTP look secure. `/health` is exempt from the HTTPS redirect for plain-HTTP health checks.
+
+## Connected financial companion (chosen 17 Oct 2026)
+
+- **Built into the IKON app (`app/Omabilo/Companion/`), not `backend/` + `web/`.**
+  - **Sign-in:** IKON's own (Google, email codes, passkeys, logout, account removal); the standalone pair has no identity provider.
+  - **Other services:** a Postgres database, stored secrets, `[Cron]` jobs that run without a browser, stable public `/api` callback addresses, and EU-pinned AI.
+  - `backend/` and `web/` stay as they are.
+- **Signing in and connecting Gmail are separate.** Only a signed-in, non-guest user can start the Gmail flow, and connecting is its own explicit step with its own consent screen.
+- **Gmail access:**
+  - The only scope is `gmail.readonly`. It's restricted, so Google verification is needed before the app leaves Testing mode.
+  - OAuth uses the code flow with PKCE and a one-time `state` row (10 minutes). The callback is `/api/oauth/google/callback`.
+  - Tokens are encrypted with AES-256-GCM (key in the IKON secret `OMABILO_TOKEN_KEY`, user id as associated data) and live only in Postgres.
+- **What is read and kept:**
+  - Metadata and snippet first; the full message only when it may be financial.
+  - Only an excerpt (at most 800 characters) is stored per financial message, never whole bodies.
+  - Non-financial messages keep just their id, so they aren't fetched again.
+- **Sync:**
+  - A `[Cron]` sweep every 15 minutes, plus "Sync now".
+  - The first scan is bounded (90 days and 300 messages by default, both configurable). After that, sync is incremental using Gmail's history ids, with a bounded rescan when the history has expired.
+  - A per-user claim column prevents overlapping runs. Failures back off exponentially.
+- **Numbers come from code, never from AI.** Extraction and cash flow are deterministic and tested. AI (opt-in per user, EU-pinned, redacted input) only explains, and its output is validated: a fact naming a number that isn't in the source is dropped.
+- **Statuses never overclaim:**
+  - "Overdue" means the due date has passed with no payment reported or confirmed. It doesn't mean verified unpaid.
+  - "Paid" is either reported by the user or confirmed by a matching payment-confirmation email.
+- **Merging duplicates:** invoices merge on the same invoice number; on the same reference only when due within 20 days. Otherwise a likely duplicate is flagged, not merged, because Finnish rent and recurring bills reuse one reference.
 
 ## Git
 

@@ -5,19 +5,21 @@ Updated 17 Oct 2026. Read this first; details live in `DECISIONS.md` (why),
 
 ## Goal
 
-Omabilo Personal ("Your money. Your way."): a mobile-friendly financial-wellbeing website at a
-public link, backed by a standalone API, with a safe path to real invoice collection later.
-**All data is fictional**; nothing connects to a bank, mailbox or provider.
+Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companion.
+- **Signed-in people** connect Gmail (read-only). Omabilo then finds their bills, salary and receipts, explains them and plans their cash flow until payday. Gmail works once you set up the Google OAuth client (`DEPLOYMENT.md`).
+- **The Demo screens** stay fictional.
+- Nothing connects to a bank.
 
 ## Architecture
 
 | Folder | What it is | Status |
 |---|---|---|
-| `app/Omabilo/` | The original IKON app: C# screens streamed by IKON | Works locally. **Keep unchanged.** |
+| `app/Omabilo/` | The IKON app: C# screens streamed by IKON. **This is the live product.** | Demo screens plus the connected companion |
+| `app/Omabilo/Companion/` | IKON-free companion logic: classification, extraction, cash flow, Gmail client, sync engine, Postgres store, AI guard | Tested in `test/Omabilo.Test` |
 | `frontend-node/` | The IKON app's viewer; only works with an IKON server | **Keep unchanged**: `ikon build`/`run`/`deploy` depend on it |
 | `backend/` | ASP.NET Core API (.NET 10), no IKON | Invoices plus per-user finances; sign-in and storage replaced (below) |
 | `web/` | React + Vite + TypeScript website for Vercel; calls `backend/` only | 7 screens, honest offline and error states |
-| `test/Omabilo.Test/` | Tests for the shared, IKON-free invoice code in `app/Omabilo/Invoices/` | |
+| `test/Omabilo.Test/` | Tests for the IKON-free code in `app/Omabilo/Invoices/` and `app/Omabilo/Companion/` (fake Google, in-memory store) | 114 tests |
 
 ## Done
 
@@ -41,13 +43,25 @@ public link, backed by a standalone API, with a safe path to real invoice collec
 - **Financial Inbox user test (IKON app):** "Explain an invoice" tab. It analyses three fictional emails or a pasted one with fixed rules, not AI (`Invoices/InvoiceExplainer.cs`), then shows a 7-question feedback form (`Invoices/InvoiceLab.cs`).
   - Answers are saved in the app's built-in IKON database, table `omabilo_test_feedback`. Pasted text is never stored.
   - Review the answers with `ikon db query "select * from omabilo_test_feedback order by created_utc"`.
+- **Connected companion (IKON app, "Your money"):**
+  - **Sign-in and access:** IKON sign-in (Google, email code, passkey, guest). Gmail connects only as a separate, explicit step: OAuth code flow with PKCE and a one-time state, scope `gmail.readonly`, tokens encrypted with AES-256-GCM.
+  - **Sync:** server-side every 15 minutes (`[Cron]`) plus "Sync now". The first scan is bounded (90 days, 300 messages). After that, sync is incremental, with a rescan when Gmail's history expires, retries with backoff and a per-user lock.
+  - **Reading mail:**
+    - rule-based classification (English and Finnish)
+    - extraction for invoices, reminders, collection notices, payslips, receipts and refunds
+    - local PDF text with PdfPig (no OCR)
+    - duplicate and reminder merging; payment confirmations mark bills paid
+  - **Planning:** deterministic cash flow until payday (Finnish weekend paydays move to Friday), with each line labelled You entered, From email or Estimate. Suggestions explain why they were made.
+  - **AI:** opt-in only, EU-pinned Claude Haiku with redacted input. Output is validated; facts with unsupported numbers are dropped. If AI fails, the rule-based result stays.
+  - **Controls:** correct, review, report paid, dispute, delete, re-read, export, delete all data, delete account (platform), and the `UserErased` handler.
+  - **Storage:** Postgres tables `om_*` in the app's built-in database, every query scoped by user id.
 - **HTTPS proxy fix (uncommitted, see below):** forwarded headers are believed only from a configured proxy, and `/health` is never redirected.
 
 ## Test results
 
 **Real automated tests (17 Oct 2026, current code):**
 - `dotnet test backend/Omabilo.Backend.slnx`: **53/53 passed**. This includes 10 proxy tests run against a *simulated* proxy in the in-memory test server.
-- `dotnet test test/Omabilo.Test`: **36/36 passed**.
+- `dotnet test test/Omabilo.Test`: **114/114 passed**. This includes the companion: OAuth flow, sync, retries, isolation, AI fallback, PDF reading and cash flow, all run against a *fake* Google.
 - `npm --prefix web test`: **20/20 passed**. `npm run build` (type check + build): OK. `npm audit`: 0 vulnerabilities.
 - IKON app build: 0 warnings, 0 errors.
 
@@ -55,13 +69,19 @@ public link, backed by a standalone API, with a safe path to real invoice collec
 - Browser run of `web/` against a local API, on desktop and phone sizes: an import, a duplicate link, approve, pay (the balance dropped exactly once), and the API-down state (errors, no figures).
 - Dockerfile build stage *simulated*: its exact files were published with `dotnet publish -c Release` in an empty folder. In Production mode it refused to start without sign-in, returned 401 without a token, and allowed only the configured CORS origin.
 
+**Companion, checked live in a local run against IKON's real Postgres (17 Oct 2026):**
+- the signed-in, guest and second-user (isolation) views
+- saving plan numbers and the cash-flow arithmetic
+- review, report paid, correction with validation, delete, export, AI opt-in saved
+- the callback refusing a forged state, and the cron job registered and running
+- Test records were deleted afterwards.
+
 **Never tested:**
-- a real `docker build`
-- any deployment
-- a real identity provider
-- a hosted database
+- a real `docker build`, or a deployment of the standalone `backend/` + `web/`
+- **real Google OAuth and real Gmail:** no OAuth client exists yet
+- a **real AI call:** AI is only tested with a fake model
+- OCR for scanned PDFs (not implemented)
 - screen-reader testing
-- real email, AI or OAuth
 
 ## Git
 

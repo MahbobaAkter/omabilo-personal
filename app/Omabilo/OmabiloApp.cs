@@ -30,10 +30,14 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
         },
     });
 
-    private record Section(string Key, string Label, string IconName);
+    // Mine: the signed-in person's own data. The rest is the fictional demo.
+    private record Section(string Key, string Label, string IconName, bool Mine = false);
 
     private static readonly Section[] Sections =
     [
+        new("my-overview", "My money", "wallet", true),
+        new("my-inbox", "My inbox", "mail", true),
+        new("my-settings", "Connections & privacy", "shield-check", true),
         new("dashboard", "Dashboard", "layout-dashboard"),
         new("inbox", "Financial Inbox", "inbox"),
         new("invoices", "Invoices", "file-text"),
@@ -78,6 +82,8 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
 
     public async Task Main()
     {
+        app.OnClientJoined(OnCompanionClientJoinedAsync);
+
         UI.Root([Page.Default, "h-screen overflow-hidden bg-background"], content: view =>
         {
             view.Row(["h-full w-full min-h-0"], content: view =>
@@ -95,6 +101,9 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                         {
                             switch (_section.Value)
                             {
+                                case "my-overview": view.Feature("my-overview", content: RenderMyOverview); break;
+                                case "my-inbox": view.Feature("my-inbox", content: RenderMyInbox); break;
+                                case "my-settings": view.Feature("my-settings", content: RenderMySettings); break;
                                 case "inbox": view.Feature("inbox", content: RenderInboxScreen); break;
                                 case "invoices": view.Feature("invoices", content: RenderInvoices); break;
                                 case "debts": view.Feature("debts", content: RenderDebts); break;
@@ -119,7 +128,16 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
 
     private int AttentionCount() => _inbox.Count(i => EffectiveStatus(i) == InboxStatus.New);
 
-    private void Go(string section) => _section.Value = section;
+    private void Go(string section)
+    {
+        _section.Value = section;
+
+        // A person's own records are read fresh each time they open one of their screens
+        if (section.StartsWith("my-", StringComparison.Ordinal))
+        {
+            _ = LoadMyAsync();
+        }
+    }
 
     private void RenderSidebar(UIView view)
     {
@@ -136,10 +154,18 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                 });
             });
 
-            view.Column(["gap-1"], content: view =>
+            view.Column(["gap-1 min-h-0 overflow-y-auto"], content: view =>
             {
+                var lastMine = (bool?)null;
+
                 foreach (var s in Sections)
                 {
+                    if (lastMine != s.Mine)
+                    {
+                        view.Text([Text.Overline, lastMine == null ? "px-3 pb-1 text-muted-foreground" : "px-3 pt-4 pb-1 text-muted-foreground"], s.Mine ? "Your money" : "Demo (fictional data)");
+                        lastMine = s.Mine;
+                    }
+
                     var active = _section.Value == s.Key;
                     var count = s.Key switch { "inbox" => AttentionCount(), "invoices" => InvoicesToReview(), _ => 0 };
 
@@ -170,7 +196,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                         r.Icon([Icon.Sm, "text-brand-secondary"], name: "shield-check");
                         r.Text([Text.Label], "Demo mode");
                     });
-                    view.Text([Text.Caption, "text-muted-foreground"], "All accounts, people and amounts here are fictional. Nothing connects to a bank.");
+                    view.Text([Text.Caption, "text-muted-foreground"], "The Demo screens use fictional accounts, people and amounts. Your own data is under Your money.");
                     view.Button([Button.GhostSm, "justify-start px-0 text-brand-secondary"], text: "Reset demo data", onClick: () => _dialog.Value = "reset");
                 });
             });
@@ -196,6 +222,12 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
 
             view.Row(["items-center gap-2 shrink-0"], content: view =>
             {
+                // The demo's bell and reset belong to the demo screens only
+                if (section.Mine)
+                {
+                    return;
+                }
+
                 var attention = AttentionCount();
 
                 view.Button([Button.OutlineMd, "relative h-10"], text: "Inbox", ariaLabel: $"Inbox, {attention} need attention",
@@ -224,10 +256,13 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
         view.Row(["md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-secondary bg-card/95 backdrop-blur-sm px-1 pb-[env(safe-area-inset-bottom)]"],
             props: new Dictionary<string, object> { ["role"] = "navigation" }, ariaLabel: "Sections", content: view =>
         {
-            foreach (var s in Sections)
+            // Phones show one group at a time, with a switch to the other
+            var mine = Sections.First(x => x.Key == _section.Value).Mine;
+
+            foreach (var s in Sections.Where(x => x.Mine == mine))
             {
                 var active = _section.Value == s.Key;
-                var shortLabel = s.Label.Split(' ')[^1] switch
+                var shortLabel = s.Key switch { "my-overview" => "Money", "my-inbox" => "Inbox", "my-settings" => "Privacy", _ => null } ?? s.Label.Split(' ')[^1] switch
                 {
                     "Inbox" => "Inbox",
                     "Invoices" => "Invoices",
@@ -254,6 +289,14 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                         v.Text(["text-[10px] leading-none truncate"], shortLabel);
                     });
             }
+
+            view.Button(["flex-1 min-w-0 h-14 flex flex-col items-center justify-center gap-0.5 rounded-xl text-muted-foreground"],
+                key: "m-switch", ariaLabel: mine ? "Open the demo" : "Open your own money", onClick: () => Go(mine ? "dashboard" : "my-overview"),
+                content: v =>
+                {
+                    v.Icon([Icon.Sm], name: mine ? "flask-conical" : "wallet");
+                    v.Text(["text-[10px] leading-none truncate"], mine ? "Demo" : "Mine");
+                });
         });
     }
 

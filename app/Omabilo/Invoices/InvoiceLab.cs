@@ -449,11 +449,10 @@ public partial class OmabiloApp
         TesterFeedback.Clean(_fbComments.Value));
 
     // The same tester gets the same short tag on every response, without storing who they are
-    private static string TesterTag()
-    {
-        var user = ReactiveScope.UserIdOrNull ?? "anonymous";
-        return "T-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("omabilo-test:" + user)))[..8];
-    }
+    private static string TesterTag() => TesterTagFor(ReactiveScope.UserIdOrNull ?? "anonymous");
+
+    private static string TesterTagFor(string userId) =>
+        "T-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("omabilo-test:" + userId)))[..8];
 
     private void RenderFeedbackForm(UIView view, InvoiceExplanation r)
     {
