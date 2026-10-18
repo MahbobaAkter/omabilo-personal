@@ -68,6 +68,7 @@ Omabilo Personal ("Your money. Your way."): a mobile-friendly financial companio
   - **AI:** opt-in only, EU-pinned Claude Haiku with redacted input. Output is validated; facts with unsupported numbers are dropped. If AI fails, the rule-based result stays.
   - **Controls:** correct, review, report paid, dispute, delete, re-read, export, delete all data, delete account (platform), and the `UserErased` handler.
   - **Storage:** Postgres tables `om_*` in the app's built-in database, every query scoped by user id.
+- **Sign-in for anyone (18 Oct 2026, `app/Omabilo/Account.cs`):** any Google, Apple, Microsoft, Signicat, email-code or passkey account signs in (a new account is created on first sign-in), or you continue as a guest. The sidebar foot (desktop) and an avatar or Sign in button in the top bar (phone) show who you are, with Sign in, Account and Sign out. Signed-in people get a "Welcome, <name>" greeting. A pending account deletion shows a banner on every screen with "Keep my account". Cancelled or failed sign-in and sign-out show a toast. The Connect Gmail card tells people that only Google test users can connect while the OAuth app is in Google's Testing stage; set the IKON secret `GOOGLE_OAUTH_PUBLISHED` to `true` once Google has verified the app to hide that note.
 - **HTTPS proxy fix (uncommitted, see below):** forwarded headers are believed only from a configured proxy, and `/health` is never redirected.
 
 ## Test results
