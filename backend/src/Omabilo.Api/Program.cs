@@ -42,9 +42,7 @@ else if (storage.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
         _ => new SqliteInvoiceStore(path));
 
     builder.Services.AddSingleton<IFinanceStore>(
-        sp => new SqliteFinanceStore(
-            path,
-            sp.GetRequiredService<TimeProvider>()));
+        sp => new SqliteFinanceStore(path, sp.GetRequiredService<TimeProvider>()));
 }
 else if (storage.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
 {
@@ -74,8 +72,9 @@ if (authMode.Equals("Demo", StringComparison.OrdinalIgnoreCase))
 }
 else if (authMode.Equals("Staging", StringComparison.OrdinalIgnoreCase))
 {
-    // Restricted deployment mode. No authentication scheme is configured.
-    // The middleware below permits only the health endpoint.
+    // No authentication scheme is configured in Staging.
+    // The staging gate below rejects all paths except /health before
+    // authentication or authorization middleware can run.
     builder.Services.AddAuthentication();
 }
 else
@@ -167,11 +166,10 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseCors();
-app.UseAuthentication();
-app.UseAuthorization();
 
 // In staging, allow only /health. Reject every other path, including
-// invoice, finance, demo, and unknown endpoints.
+// invoice, finance, demo, and unknown endpoints before authentication
+// and authorization middleware can challenge an unconfigured scheme.
 if (authMode.Equals("Staging", StringComparison.OrdinalIgnoreCase))
 {
     app.UseWhen(
@@ -189,6 +187,9 @@ if (authMode.Equals("Staging", StringComparison.OrdinalIgnoreCase))
             });
         }));
 }
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 // ── Health check ─────────────────────────────────────────────────────────────
 app.MapGet(
