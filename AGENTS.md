@@ -29,27 +29,27 @@ Animations are keyframe steps, each `time:utilities` joined by `_`: `"motion-[0:
 
 ## Running and checking the app
 
-From the app root, `ikon run --detach` starts the app and returns once it is ready; a plain
+From the app root, `ikon run --detach` starts the app, returns when ready; a plain
 `ikon run` blocks. `build/app/artifacts/bin/<App>/debug/ikon-server-info.json`
 has the URLs. `ikon stop` saves persistent state and ends the run. A `.cs` edit under `app/<App>/` hot-reloads
 the run (a compile error keeps the previous build, an `OnStarting` that throws leaves
 none, and `browse` prints the error;
 `ikon status --wait` returns once the reload has applied or failed); a `.csproj`
-or `ikon-config.toml` change needs `ikon stop` and a new run. Check the app as text before reaching for a browser:
+or `ikon-config.toml` change needs `ikon stop` and a new run. Check the app as text first (`--text-only` needs no browser, runs anywhere):
 
 ```bash
-ikon browse --steps "observe"  # screen text + [id] action handles
+ikon browse --text-only --steps "observe"  # text + [id] handles
 ikon browse --steps "fill Message hello; tap Send; wait-absent 60s Thinking; wait 5s --new Sent"
 ikon browse --steps 'tap Host; capture code /Room (\w+)/; as bob: fill Room code ${code}; tap Join'
 ```
 
-`ikon browse --help` lists the steps and options. Acting steps print only what changed; `click`,
-`eval` and `console` reach custom React components; `observe` lists a canvas or custom node as one line; its `content` prop adds a text summary. `look` (a screenshot) is for pixels only. A run starts at `/`: `--path /room/7` opens another page. `wait 15s Sent` returns once the text shows, or if it showed before
-the last tap, once the tap's handlers return. `--new` waits for new text, `wait 15s` alone for those
-handlers, and `sleep 15s` pauses. A bare number is milliseconds. Each run is a new
+`ikon browse --help` lists steps and options; `--full` prints whole texts. Acting steps print only what changed; `click`,
+`eval` and `console` reach custom React components; `observe` lists a canvas or custom node as one line; its `content` prop adds a text summary. `look` is for pixels only. A run starts at `/`: `--path /room/7` opens another page. `wait 15s Sent` returns once the text shows, or if it showed before
+the last tap, once the tap's handlers return. `--new` waits for new text. A bare `wait 15s` ends at the
+app's first update or when those handlers return: not a pause, only `sleep 15s` pauses. A bare number is milliseconds. Each run is a new
 client (new ids, empty `ClientReactive` state) that ends with the run, and so does what the app keeps only while a client is connected (a room): a script names controls by label
-and plays a whole scenario in one run. Where the shell strips quotes (PowerShell), use
-`--steps-file scratch/steps.txt`. `hold`, `mic` and `--fake-media-file` (a .wav loops into
+and plays the whole flow in one run. Where the shell strips quotes (PowerShell), use
+`--steps-file scratch/steps.txt` (one step per line). `hold`, `mic` and `--fake-media-file` (a .wav loops into
 the microphone, or plays once with `--mic-once`; a .y4m is the camera) test a voice or camera app.
 `look`, `upload`, `mic` and `audio` need the page, which `--text-only` and an `as` user lack
 (`as bob: observe` reads bob).
@@ -60,25 +60,24 @@ the local run or the deployed app, and
 
 `--app-id <space>` or `--target <name>` makes `browse` and `test` drive the **deployed** app;
 without them they drive the local run, else the linked deployed app. The page signs in as you when
-the app offers the method you used for `ikon login`; `--as-guest` opens it as a new guest, and on a
+the app offers the method you used for `ikon login` (or email, for your organisation's app); `--as-guest` opens it as a new guest, and on a
 local run `--as-user <name>` acts as a named test user (`--role`), and `as <name>+<role>:` as another up to the
-next `as` (`as me:` is the run's own). A deployed app takes no `as` users: run one
-`ikon browse --text-only --guest-name <name>` per user in parallel, each ending in a `sleep`. When
-`[Auth] Methods` lists "global", every guest is one shared user, which a deployed app's page cannot
+next `as` (`as me:` is the run's own). On a deployed app `as <name>:` is the named guest
+`--guest-name <name>` is. When
+a surface lists "global", every guest is one shared user, which a deployed app's page cannot
 join: use `--text-only` there, a local run for `look`, or list "guest". `click <name>` is a real mouse click.
 
 `ikon link --target staging` makes a staging app; `--target staging` aims `deploy`, `browse`,
-`test` and `logs` at it. `ikon deployment rollback` undoes a deploy.
+`test` and `logs` at it. `ikon deployment rollback` undoes it.
 
 ## The ikon tool's commands
 
 `ikon help --json` covers every command, how the app and environment are chosen, and
 the shape of `--format json` output (`ikon help <command> --json`: one). An unknown command a doc names
-was renamed; see the help. `ikon deploy` commits and pushes first (`--no-save`: neither). Settings are in `ikon-config.toml`,
+was renamed. `ikon deploy` commits and pushes first (`--no-save`: neither). Settings are in `ikon-config.toml`,
 each explained by the comment above it: `ikon-config.development.toml` for an app on the development
 platform (`run` and `deploy` read that one file), `ikon-config.<name>.toml` for `--target <name>`.
-On Windows, read and edit files with your file tools; PowerShell 5.1's `cat`/`Get-Content`/`Set-Content`
-garble non-ASCII text.
+On Windows, read and edit files with your file tools: PowerShell 5.1's `cat`/`Set-Content` garble non-ASCII text.
 
 Root folders (`app-structure`): `app/`, `frontend-node/`, `frontend-flutter/`, `data/`,
 `public/`, `branding/` (replace the placeholder `logo.png`, then `ikon icon`), `emails/`, `legal/`, `router/`, `schema/`, `tools/<runtime>/` (programs the
