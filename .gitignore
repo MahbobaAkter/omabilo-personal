@@ -25,7 +25,6 @@ obj
 
 # Local check scripts, screenshots and logs
 
-
 # Standalone backend: local databases and private settings never go into git
 backend/**/App_Data/
 *.db
@@ -41,7 +40,6 @@ backend/**/secrets.json
 .claude/
 
 /scripts/
-/scripts/
 
 # BEGIN ikon-assets — real binaries offloaded to .ikonasset pointers (managed by `ikon asset`, do not edit)
 branding/logo.png
@@ -53,4 +51,3 @@ public/favicon-512.png
 public/favicon.ico
 public/maskable-512.png
 # END ikon-assets
-/scripts/

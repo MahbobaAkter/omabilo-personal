@@ -1,6 +1,6 @@
 # Schema version. The ikon tool upgrades older files and saves at its current version; a file newer
 # than the tool refuses to load (update the tool).
-ConfigVersion = 7
+ConfigVersion = 8
 
 # The space database that backs PersistentReactive state. Empty: the platform picks the built-in
 # "app" database, or the space's only platform-managed one, and records the choice so it stays put.
@@ -8,29 +8,16 @@ ConfigVersion = 7
 # state falls back to asset storage.
 StateDatabase = ""
 
+# Which email domains may become members of the space (e.g. ["mycompany.com"]). Empty admits every
+# domain. It is checked when a person's profile is created, so anyone who already has a profile, or
+# who was invited at a verified email address, still gets in from any domain. Anonymous visitors are
+# not members, so a surface that admits them is unaffected.
+DomainAllowlist = []
+
 # What happens when a version of the app is activated (activation is separate from deployment)
 [Activation]
 # Stop all active sessions of the app on activation
 StopSessions = true
-
-# How visitors enter the app frontend
-[Auth]
-# Sign-in providers (google, apple, microsoft, signicat, email, passkey) plus anonymous entry:
-# "guest" gives each visitor a private, device-scoped anonymous user; "global" gives every visitor
-# one shared anonymous user on one shared app instance (cheap for public landing pages; scale out
-# with [Sharded] on the SessionIdentity record; detect with Context.IsGlobal). List both to enter as
-# "global" and upgrade a visitor to "guest" on demand. Signing in upgrades either to the account.
-# A private app lists neither "guest" nor "global" and sets RequireSignIn = true below.
-Methods = ["google", "apple", "microsoft", "signicat", "email", "passkey", "guest"]
-# If non-empty, only emails from these domains may join the app (e.g. ["mycompany.com"]). It is checked
-# when a person joins, so anyone who already has a profile in the app, or who was invited at a verified
-# email address, still gets in from any domain
-DomainAllowlist = []
-# false: visitors enter anonymously and sign in on demand (branch on Context.IsAnonymous, prompt with
-# ClientFunctions.LoginAsync("google")). true: a sign-in wall before the app loads, with a "Continue
-# as guest" button when Methods lists "guest" or "global"; with neither listed, no route is
-# prerendered to crawlable HTML.
-RequireSignIn = false
 
 # The platform's feedback sheet: report a problem or an idea by text, voice, files and screenshot.
 # Reports go to the app's space ('ikon issue list --source person', Studio). Who is offered it is the
@@ -50,34 +37,6 @@ Button = "overlay"
 # from the app then carries the last few actions that led to it. Records only users who granted
 # ConsentPurposes.UsageMeasurement.
 UiActions = false
-
-# Boot snapshot: the app's initial UI captured at bundle/deploy time so the first paint is instant.
-# The snapshot is a PUBLIC asset, so all content is replaced with skeletons by default; wrap safe
-# content (logos, static chrome) in SnapshotReveal to show it, or a public page's root to show all of it.
-# The Parallax guide's "Per-route snapshots and SEO" section has the details.
-[BootSnapshot]
-# Public routes to snapshot (e.g. ["/", "/pricing"]); empty disables snapshots. Each must be a path the
-# app serves without redirecting — a redirect during capture ships the bundle without snapshots, so
-# declare "/home", not "/", if "/" redirects there. When the app opens without signing in
-# (RequireSignIn = false, or "guest"/"global" in Auth.Methods) each route is also prerendered to
-# crawlable HTML with a generated sitemap.xml and robots.txt. Add content routes (one per article) in
-# code with app.OnSnapshotRoutes(...). A snapshot is matched by path alone, so "/?game=abc" first
-# paints the "/" snapshot until the live page replaces it.
-Routes = ["/"]
-# How many routes are captured, Routes and app.OnSnapshotRoutes together, in that order; 1 to 200.
-# Routes past it get no snapshot, no prerendered page and no sitemap entry, and the deploy names them
-# in a warning. Each route adds capture time to every deploy, and all of them share a 10-minute budget.
-MaxRoutes = 50
-# Seed rules, only for apps that render different pages per identity or path shape: ordered
-# "pattern:variantId" entries, first match wins. A segment is a literal, "*" (one segment) or a final
-# "**" (the rest), so "/**:shell" matches every path. Each variant id is captured once as a skeleton
-# the app renders by branching on view.SnapshotVariant == "id". Guests use an exact route snapshot
-# before these rules; signed-in visitors use these rules first. Variants are never prerendered to
-# HTML or listed in the sitemap.
-# GuestSeeds = ["/**:welcome"]
-GuestSeeds = []
-# SignedInSeeds = ["/**:shell"]
-SignedInSeeds = []
 
 # The app's privacy notice and terms. Write legal/privacy.md and legal/terms.md in the app root (beside
 # public/ and data/) and each is served as a page at its path below, or set a URL to redirect that
@@ -117,3 +76,9 @@ Fetch = []
 [Target]
 SpaceId = "6ad2bf16644b301473e4962c"
 Name = "Omabilo"
+
+# The kinds of visitor the app serves, one [[Surface]] each: who may enter, which routes belong to
+# it, when it connects and negotiates media, and whether its clients see each other. With no
+# [[Surface]] declared, the app has one surface: anonymous entry as "guest" beside the default
+# sign-in providers, "/" captured, connecting at load. The app-structure guide describes surfaces
+# in full.

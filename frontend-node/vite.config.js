@@ -47,6 +47,38 @@ const ikonThemeFonts = (publicDir) => ({
   },
 });
 
+const ikonBootTable = (env) => {
+  const value = (name) => process.env[name] || env[name] || '';
+  const surfaces = value('VITE_IKON_SURFACES');
+
+  if (!surfaces) {
+    return undefined;
+  }
+
+  return {
+    version: 1,
+    spaceId: value('VITE_IKON_SPACE_ID'),
+    backendUrl: value('VITE_IKON_BACKEND_URL') || undefined,
+    authUrl: value('VITE_IKON_AUTH_URL') || undefined,
+    localServer:
+      value('VITE_LOCAL_IKON_SERVER_ENABLED') === 'true'
+        ? { host: value('VITE_LOCAL_IKON_SERVER_HOST') || 'localhost', port: Number(value('VITE_LOCAL_IKON_SERVER_PORT') || 8443) }
+        : undefined,
+    devLogin: value('VITE_IKON_DEV_LOGIN_TOKEN') ? { token: value('VITE_IKON_DEV_LOGIN_TOKEN'), runId: value('VITE_IKON_DEV_LOGIN_RUN_ID') } : undefined,
+    waitForExternalConnectUrl: value('VITE_WAIT_FOR_EXTERNAL_CONNECT_URL') === 'true' || undefined,
+    surface: value('VITE_IKON_SURFACE') || undefined,
+    surfaces: JSON.parse(surfaces),
+  };
+};
+
+const ikonBoot = (boot) => ({
+  name: 'ikon-boot',
+  transformIndexHtml: {
+    order: 'pre',
+    handler: () => (boot ? [{ tag: 'script', children: `window.__IKON_BOOT__=${JSON.stringify(boot).replaceAll('<', '\\u003c')};`, injectTo: 'head-prepend' }] : []),
+  },
+});
+
 const appNameMarker = '__IKON_APP_NAME__';
 const webManifestFile = 'manifest.webmanifest';
 const htmlEscapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -96,17 +128,6 @@ export default defineConfig(({ mode }) => {
   const frontendUrl = process.env.VITE_SERVER_FRONTEND_URL || env.VITE_SERVER_FRONTEND_URL || `https://${frontendHost}:${frontendPort}`;
   const openBrowser = (process.env.VITE_SERVER_OPEN_BROWSER || env.VITE_SERVER_OPEN_BROWSER) === 'true';
   const isTunneled = (process.env.VITE_SERVER_TUNNELED || env.VITE_SERVER_TUNNELED) === 'true';
-  const authRequireSignIn = (process.env.VITE_IKON_AUTH_REQUIRE_SIGN_IN || env.VITE_IKON_AUTH_REQUIRE_SIGN_IN) === 'true';
-  const authMethods = process.env.VITE_IKON_AUTH_METHODS || env.VITE_IKON_AUTH_METHODS ? JSON.parse(process.env.VITE_IKON_AUTH_METHODS || env.VITE_IKON_AUTH_METHODS) : ['google'];
-  const authSpaceId = process.env.VITE_IKON_AUTH_SPACE_ID ?? env.VITE_IKON_AUTH_SPACE_ID ?? '';
-  const backendUrl = process.env.VITE_IKON_BACKEND_URL || env.VITE_IKON_BACKEND_URL || '';
-  const authUrl = process.env.VITE_IKON_AUTH_URL || env.VITE_IKON_AUTH_URL || '';
-  const devLoginToken = process.env.VITE_IKON_DEV_LOGIN_TOKEN || env.VITE_IKON_DEV_LOGIN_TOKEN || '';
-  const devLoginRunId = process.env.VITE_IKON_DEV_LOGIN_RUN_ID || env.VITE_IKON_DEV_LOGIN_RUN_ID || '';
-  const waitForExternalConnectUrl = (process.env.VITE_WAIT_FOR_EXTERNAL_CONNECT_URL || env.VITE_WAIT_FOR_EXTERNAL_CONNECT_URL) === 'true';
-  const localIkonServerEnabled = (process.env.VITE_LOCAL_IKON_SERVER_ENABLED || env.VITE_LOCAL_IKON_SERVER_ENABLED) === 'true';
-  const localIkonServerHost = process.env.VITE_LOCAL_IKON_SERVER_HOST || env.VITE_LOCAL_IKON_SERVER_HOST || 'localhost';
-  const localIkonServerPort = Number(process.env.VITE_LOCAL_IKON_SERVER_PORT || env.VITE_LOCAL_IKON_SERVER_PORT || '8443');
   const certPath = (process.env.VITE_IKON_SERVER_CERT_PATH || env.VITE_IKON_SERVER_CERT_PATH)?.trim();
   const keyPath = (process.env.VITE_IKON_SERVER_KEY_PATH || env.VITE_IKON_SERVER_KEY_PATH)?.trim();
   const hasCertificate = !isTunneled && certPath && keyPath && existsSync(certPath) && existsSync(keyPath);
@@ -117,7 +138,7 @@ export default defineConfig(({ mode }) => {
   // Fallback for apps not yet migrated to the root public/
   const publicDir = existsSync(resolve(__dirname, '../public')) ? resolve(__dirname, '../public') : resolve(__dirname, 'public');
 
-  const plugins = [ikonEmbedHeaders, ikonThemeFonts(publicDir), ikonAppName(publicDir, appName), ikonPreloadIcons, react()];
+  const plugins = [ikonBoot(ikonBootTable(env)), ikonEmbedHeaders, ikonThemeFonts(publicDir), ikonAppName(publicDir, appName), ikonPreloadIcons, react()];
 
   if (!hasCertificate && !isTunneled) {
     plugins.push(basicSsl());
@@ -168,19 +189,6 @@ export default defineConfig(({ mode }) => {
     resolve: resolveConfig,
     worker: {
       format: 'es',
-    },
-    define: {
-      __IKON_AUTH_REQUIRE_SIGN_IN__: JSON.stringify(authRequireSignIn),
-      __IKON_AUTH_METHODS__: JSON.stringify(authMethods),
-      __IKON_AUTH_SPACE_ID__: JSON.stringify(authSpaceId),
-      __IKON_BACKEND_URL__: JSON.stringify(backendUrl),
-      __IKON_AUTH_URL__: JSON.stringify(authUrl),
-      __IKON_DEV_LOGIN_TOKEN__: JSON.stringify(devLoginToken),
-      __IKON_DEV_LOGIN_RUN_ID__: JSON.stringify(devLoginRunId),
-      __IKON_WAIT_FOR_EXTERNAL_CONNECT_URL__: JSON.stringify(waitForExternalConnectUrl),
-      __IKON_LOCAL_IKON_SERVER_ENABLED__: JSON.stringify(localIkonServerEnabled),
-      __IKON_LOCAL_IKON_SERVER_HOST__: JSON.stringify(localIkonServerHost),
-      __IKON_LOCAL_IKON_SERVER_PORT__: JSON.stringify(localIkonServerPort),
     },
     optimizeDeps: optimizeDepsConfig,
     server: {
