@@ -18,6 +18,33 @@ public static class ItemRules
 {
     public const double ReviewConfidence = 0.7;
 
+    /// <summary>The inbox views, as (key, label). "recurring" lists usual monthly costs, not items.</summary>
+    public static readonly (string Key, string Label)[] Views =
+    [
+        ("attention", "Needs attention"), ("review", "Needs review"), ("bills", "Bills"), ("tax", "Tax"), ("debt", "Debt"),
+        ("income", "Income"), ("spending", "Spending"), ("recurring", "Recurring"), ("all", "All"),
+    ];
+
+    /// <summary>A tax decision or anything filed under Taxes.</summary>
+    public static bool IsTax(FinancialItem i) => i.Kind == FinKind.TaxNotice || i.Category == Categories.Taxes;
+
+    /// <summary>Debt collection, a loan or credit instalment, or anything filed under debt repayments.</summary>
+    public static bool IsDebt(FinancialItem i) => i.Kind is FinKind.DebtCollection or FinKind.LoanInstalment || i.Category == Categories.Debt;
+
+    /// <summary>Whether an item shows in an inbox view. An unknown view shows everything, so a filter never hides records.</summary>
+    public static bool InView(FinancialItem i, ItemStatus status, string view) => view switch
+    {
+        "attention" => status.NeedsReview || status.Status is DisplayStatus.Overdue or DisplayStatus.DueSoon or DisplayStatus.NeedsReview,
+        "review" => status.NeedsReview || status.Status == DisplayStatus.NeedsReview,
+        "bills" => i.IsBill,
+        "tax" => IsTax(i),
+        "debt" => IsDebt(i),
+        "income" => i.IsIncome,
+        "spending" => i.IsExpense,
+        "recurring" => false,
+        _ => true,
+    };
+
     public static ItemStatus StatusOf(FinancialItem i, DateTime today)
     {
         today = today.Date;

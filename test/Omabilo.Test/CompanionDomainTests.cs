@@ -359,6 +359,17 @@ public class CashFlowTests
     }
 
     [Fact]
+    public void An_uploaded_bill_is_labelled_uploaded_not_from_email()
+    {
+        var uploaded = Bill("up", "Kuura Energia Oy", 58.40m, 4) with { Sources = [new SourceRef(BillUpload.IdPrefix + "abc", "", "kuura.pdf", Today, "", "original")] };
+        var mailed = Bill("mail", "Kuusi Water Oy", 30m, 4) with { Sources = [new SourceRef("gmail-1", "billing@kuusi.example", "Invoice", Today, "", "original")] };
+        var plan = CashFlowPlanner.Plan([uploaded, mailed], new CompanionSettings(), ItemRules.Income([], new CompanionSettings(), Today), Today);
+
+        Assert.Equal(AmountBasis.Uploaded, plan.Obligations.Single(o => o.ItemId == "up").Basis);
+        Assert.Equal(AmountBasis.FromEmail, plan.Obligations.Single(o => o.ItemId == "mail").Basis);
+    }
+
+    [Fact]
     public void Without_a_balance_no_remainder_is_invented()
     {
         var plan = CashFlowPlanner.Plan([Bill("a", "Kuusi", 30m, 3)], new CompanionSettings(), ItemRules.Income([], new CompanionSettings(), Today), Today);

@@ -2,7 +2,7 @@
 // tested code; no model ever computes a number. Each line says where its amount came from, and
 // anything left out is listed with the reason, so nothing is counted twice or silently.
 
-public enum AmountBasis { UserEntered, FromEmail, Estimate, Calculated }
+public enum AmountBasis { UserEntered, FromEmail, Estimate, Calculated, Uploaded }
 
 public sealed record CashLine(string Label, decimal Amount, AmountBasis Basis, DateTime? Date, string? ItemId, string Note);
 
@@ -33,6 +33,10 @@ public sealed record Suggestion(string Title, string Why, string Tone, IReadOnly
 
 public static class CashFlowPlanner
 {
+    /// <summary>An amount read from a PDF the person uploaded, or from an email.</summary>
+    private static AmountBasis BasisOf(FinancialItem i) =>
+        i.Sources.Count > 0 && BillUpload.IsUploadId(i.Sources[0].GmailId) ? AmountBasis.Uploaded : AmountBasis.FromEmail;
+
     public static CashFlowPlan Plan(IReadOnlyList<FinancialItem> items, CompanionSettings settings, IncomeOutlook income, DateTime today)
     {
         today = today.Date;
@@ -62,7 +66,7 @@ public static class CashFlowPlanner
                 continue;
             }
 
-            incomeLines.Add(new CashLine(i.Title, i.Net!.Value, AmountBasis.FromEmail, i.EventDate, i.Id,
+            incomeLines.Add(new CashLine(i.Title, i.Net!.Value, BasisOf(i), i.EventDate, i.Id,
                 i.IncomeEvidence == IncomeEvidence.ReportedReceived ? "The sender says it was paid." : "Expected according to the message, not yet confirmed."));
         }
 
@@ -79,7 +83,7 @@ public static class CashFlowPlanner
             if (ItemRules.CountsAsOpenObligation(i))
             {
                 var overdue = i.DueDate!.Value.Date < today;
-                obligationLines.Add(new CashLine(i.Title, i.Amount!.Value, AmountBasis.FromEmail, i.DueDate, i.Id,
+                obligationLines.Add(new CashLine(i.Title, i.Amount!.Value, BasisOf(i), i.DueDate, i.Id,
                     overdue ? "Overdue: counted, because nothing says it's paid." : "Due in this period."));
                 continue;
             }

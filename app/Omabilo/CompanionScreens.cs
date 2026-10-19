@@ -505,6 +505,7 @@ public partial class OmabiloApp
         {
             AmountBasis.UserEntered => ("You entered", SemanticTone.Info),
             AmountBasis.FromEmail => ("From email", SemanticTone.Success),
+            AmountBasis.Uploaded => ("Uploaded", SemanticTone.Success),
             AmountBasis.Estimate => ("Estimate", SemanticTone.Warning),
             _ => ("Calculated", SemanticTone.Neutral),
         };
@@ -1119,17 +1120,8 @@ public partial class OmabiloApp
         var today = DateTime.UtcNow.Date;
         var statuses = snap.Items.ToDictionary(i => i.Id, i => ItemRules.StatusOf(i, today));
 
-        bool InFilter(FinancialItem i, string f) => f switch
-        {
-            "attention" => statuses[i.Id].NeedsReview || statuses[i.Id].Status is DisplayStatus.Overdue or DisplayStatus.DueSoon or DisplayStatus.NeedsReview,
-            "bills" => i.IsObligation || i.Kind is FinKind.Invoice or FinKind.PaymentReminder or FinKind.DebtCollection or FinKind.TaxNotice or FinKind.Subscription or FinKind.Insurance or FinKind.LoanInstalment,
-            "income" => i.IsIncome,
-            "spending" => i.IsExpense,
-            "uncertain" => i.Flags.Count > 0 || i.Missing.Count > 0 || i.Suspicious || i.PossibleDuplicateOf != null || i.Confidence < ItemRules.ReviewConfidence,
-            _ => true,
-        };
-
-        var filters = new[] { ("attention", "Needs attention"), ("bills", "Bills"), ("income", "Income"), ("spending", "Spending"), ("recurring", "Recurring"), ("uncertain", "Uncertain"), ("all", "All") };
+        bool InFilter(FinancialItem i, string f) => ItemRules.InView(i, statuses[i.Id], f);
+        var filters = ItemRules.Views;
 
         view.Box([Card.Default, "p-4 sm:p-5 flex flex-col gap-4"], content: card =>
         {

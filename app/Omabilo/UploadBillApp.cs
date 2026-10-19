@@ -26,10 +26,11 @@ public partial class OmabiloApp
             }
 
             v.FileUpload(["rounded-xl border-2 border-dashed border-secondary bg-background hover:border-brand p-5 flex flex-col items-center gap-2 cursor-pointer text-center"],
-                accept: [".pdf", "application/pdf"], maxFileSize: BillUpload.MaxBytes, disabled: _upReading.Value || _myBusy.Value,
+                accept: [".pdf", "application/pdf"], disabled: _upReading.Value || _myBusy.Value,
                 ariaLabel: "Choose a PDF bill to save",
-                // Checked on the server before any byte is sent: the browser's limit alone can be
-                // bypassed, and the platform fails an upload whose bytes don't match the size claimed here
+                // Checked on the server before any byte is sent, with no browser limit: the browser's limit drops
+                // a large file without a message, and could be bypassed anyway. The platform fails an upload whose
+                // bytes don't match the size claimed here
                 onUploadPreStart: async args =>
                 {
                     if (args.Size is > 0 and <= BillUpload.MaxBytes)
