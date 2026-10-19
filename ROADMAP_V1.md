@@ -24,10 +24,11 @@ IKON app (C#) ── screens: Home · My inbox · Bills · Pay · Debts · Goals
 | Module | Status |
 |---|---|
 | Sign-in (any account, guest) | VERIFIED WORKING (live) |
-| Upload a PDF bill | VERIFIED WORKING on staging 19 Oct 2026 (fictional PDF saved and read, survives reload, not-a-PDF rejected, guest sees nothing); 2 small fixes open |
+| Upload a PDF bill | VERIFIED WORKING on staging 19 Oct 2026 (fictional PDF saved and read, survives reload, not-a-PDF and over-10-MB rejected with a message, labelled "Uploaded", guest sees nothing); second signed-in account not yet tested |
 | Gmail connect + sync | PARTIALLY: live OAuth works for Google test users only; no real bill read yet |
 | Forwarding address | BLOCKED: IKON inbound email returns 403 |
 | Classify + extract + explain (rules, PDF) | PARTIALLY: tested on fictional data |
+| Document routing: Bills, Tax, Debt, Income, Spending, Needs review | VERIFIED WORKING (unit tests for each kind; inbox views on staging c0a16ace) |
 | Personal inbox: review, correct, paid, delete, export | VERIFIED WORKING (local run, fictional data) |
 | Payslips separate from bills | PARTIALLY |
 | Payday plan from real records | PARTIALLY |
@@ -40,7 +41,7 @@ IKON app (C#) ── screens: Home · My inbox · Bills · Pay · Debts · Goals
 | Email drafts (copy only, no sending) | MISSING |
 | OCR for scans | MISSING |
 | Privacy policy | MISSING (needs the owner's details) |
-| Deploying | VERIFIED WORKING on staging (ab781cfa, frontend bridged to SDK 1.13.9); production not redeployed |
+| Deploying | VERIFIED WORKING on staging (c0a16ace, frontend bridged to SDK 1.13.9); production not redeployed |
 
 ## V1 steps, in order (each ends with a check)
 
