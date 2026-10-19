@@ -20,6 +20,7 @@ StopSessions = true
 # one shared anonymous user on one shared app instance (cheap for public landing pages; scale out
 # with [Sharded] on the SessionIdentity record; detect with Context.IsGlobal). List both to enter as
 # "global" and upgrade a visitor to "guest" on demand. Signing in upgrades either to the account.
+# A private app lists neither "guest" nor "global" and sets RequireSignIn = true below.
 Methods = ["google", "apple", "microsoft", "signicat", "email", "passkey", "guest"]
 # If non-empty, only emails from these domains may join the app (e.g. ["mycompany.com"]). It is checked
 # when a person joins, so anyone who already has a profile in the app, or who was invited at a verified
@@ -33,12 +34,14 @@ RequireSignIn = false
 
 # The platform's feedback sheet: report a problem or an idea by text, voice, files and screenshot.
 # Reports go to the app's space ('ikon issue list --source person', Studio). Who is offered it is the
-# space's setting, which is off for a new app: turn it on live with 'ikon feedback set --audience signed-in'
-# or in Studio (Settings > Sharing), and 'ikon feedback status' shows it. The platform draws its own
-# button; ClientFunctions.OpenFeedbackAsync is only for an app that wants a control of its own.
+# space's setting, which is off for a new app: turn it on with 'ikon feedback set --audience signed-in'
+# or in Studio (Settings > Sharing), and 'ikon feedback status' shows it. A deployed app follows a
+# change at once, a local run when it next starts. The platform draws its own button;
+# ClientFunctions.OpenFeedbackAsync is only for an app that wants a control of its own.
 [Feedback]
 # "overlay": a floating feedback button the platform draws for everyone offered feedback, so the
-# app needs no control of its own; each person can hide it from the sheet. "none": no button.
+# app needs no control of its own; each person can hide it from the sheet. Feedback starts off, so it
+# shows only after 'ikon feedback set --audience'. "none": no button.
 Button = "overlay"
 
 # Usage measurement. An event names the feature and the control, never what anyone typed, picked or sent.
@@ -92,7 +95,7 @@ TermsPath = "/legal/terms"
 
 # Custom packaging steps for 'ikon bundle' and 'ikon deploy'
 [Package]
-# Commands run in the app root after the build, before zipping (e.g. ["python scripts/pack_assets.py"]).
+# Commands run in the app root after the build, before zipping (e.g. ["python app-scripts/pack_assets.py"]).
 # IKON_BUNDLE_APP_DIR becomes the app's folder on the server (its Data/ is app.Files.Data; binaries and
 # #! scripts keep their execute bit); programs written to IKON_BUNDLE_TOOLS_DIR are on the deployed
 # app's PATH; IKON_BUNDLE_FRONTEND_DIR is the frontend build. Anything else under IKON_BUNDLE_DIR is
@@ -102,10 +105,12 @@ PrePackage = []
 # Programs the app starts that are downloaded rather than committed to its tools/ folder
 [Tools]
 # Commands run in the app root that fill IKON_TOOLS_DIR (tools/<runtime>/) for IKON_TOOLS_RUNTIME (e.g.
-# ["python scripts/fetch_tools.py"]): before 'ikon run' for this machine, before 'ikon run --container'
-# for linux-x64 (linux-arm64 on Arm), and before 'ikon bundle'/'ikon deploy' for linux-x64. They run
-# every time, so return quickly when the folder is complete and do nothing for a runtime you have no
-# programs for. Keep the folder out of git.
+# ["python app-scripts/fetch_tools.py"]): before 'ikon run' for this machine, before 'ikon run --container'
+# for linux-x64 (linux-arm64 on Arm), and before 'ikon bundle'/'ikon deploy' for linux-x64; 'ikon build'
+# does not run them. A command starts its program directly, without a shell, with the PATH the ikon tool
+# has, and a program it starts by name is the first one on that PATH. They run every time, so return
+# quickly when the folder is complete and do nothing for a runtime you have no programs for. Keep the
+# folder out of git.
 Fetch = []
 
 # Target information for deployment (automatically configured with 'ikon link')

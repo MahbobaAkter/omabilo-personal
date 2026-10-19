@@ -99,6 +99,8 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                         view.Column(["mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 pt-2 pb-28 md:pb-12 gap-6",
                             "motion-[0:opacity-0_translate-y-[6px],100:opacity-100_translate-y-0] motion-duration-300ms"], content: view =>
                         {
+                            RenderRemovalBanner(view);
+
                             switch (_section.Value)
                             {
                                 case "my-overview": view.Feature("my-overview", content: RenderMyOverview); break;
@@ -119,6 +121,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
 
             RenderMobileNav(view);
             RenderDialogs(view);
+            RenderAccountDialog(view);
             RenderUndoToast(view);
             view.ToastHost(_toasts);
         });
@@ -200,6 +203,8 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                     view.Button([Button.GhostSm, "justify-start px-0 text-brand-secondary"], text: "Reset demo data", onClick: () => _dialog.Value = "reset");
                 });
             });
+
+            RenderAccountPanel(view);
         });
     }
 
@@ -222,6 +227,8 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
 
             view.Row(["items-center gap-2 shrink-0"], content: view =>
             {
+                RenderAccountButton(view);
+
                 // The demo's bell and reset belong to the demo screens only
                 if (section.Mine)
                 {

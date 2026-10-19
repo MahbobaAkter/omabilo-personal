@@ -36,7 +36,7 @@ public partial class OmabiloApp
         {
             view.Box([Card.Default, "p-6"], content: v => v.EmptyState("Sign in to use Invoices",
                 description: "Invoices are stored per person, so they need a signed-in account.", icon: "lock",
-                action: a => a.Button([Button.PrimaryMd], text: "Sign in", onClick: async () => await ClientFunctions.LoginShowAsync("Sign in to keep your invoices"))));
+                action: a => a.Button([Button.PrimaryMd], text: "Sign in", onClick: async () => await SignInAsync("Sign in to keep your invoices"))));
             return;
         }
 

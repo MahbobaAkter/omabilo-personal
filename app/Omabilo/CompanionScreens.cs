@@ -62,7 +62,14 @@ public partial class OmabiloApp
 
     private async Task OnCompanionClientJoinedAsync(Context ctx)
     {
-        if (ctx.IsSnapshot || ctx.IsAnonymous)
+        if (ctx.IsSnapshot)
+        {
+            return;
+        }
+
+        await LoadMeAsync(ctx);
+
+        if (ctx.IsAnonymous)
         {
             return;
         }
@@ -174,7 +181,7 @@ public partial class OmabiloApp
 
     // ── Actions ─────────────────────────────────────────────────────────────
 
-    private async Task SignInAsync() => await ClientFunctions.LoginShowAsync("Sign in to use Omabilo with your own email");
+    private async Task SignInAsync() => await SignInAsync("Sign in to use Omabilo with your own email");
 
     private async Task ConnectGmailAsync()
     {
@@ -486,9 +493,11 @@ public partial class OmabiloApp
             v.Heading("Use Omabilo with your own email", style: [Text.H4, "m-0 text-foreground"], level: 2);
             v.Text([Text.Body, "text-foreground/90"],
                 "Sign in to connect your Gmail. Omabilo then finds your bills, payslips and receipts, explains them and plans your money until payday. Signing in doesn't give Omabilo access to your email; connecting Gmail is a separate step you choose.");
+            v.Text([Text.BodySm, "text-muted-foreground"],
+                "Any account works: Google, Apple, Microsoft, Finnish bank ID (Signicat), a one-time code sent to your email, or a passkey. A new account is created the first time you sign in, and its data is visible only to you.");
             v.Row(["gap-2 flex-wrap"], content: r =>
             {
-                r.Button([Button.PrimaryMd], text: "Sign in", icon: "log-in", onClick: SignInAsync);
+                r.Button([Button.PrimaryMd], text: _signingIn.Value ? "Opening…" : "Sign in or create an account", icon: "log-in", disabled: _signingIn.Value, onClick: async () => await SignInAsync());
                 r.Button([Button.OutlineMd], text: "Try the demo", onClick: () => Go("dashboard"));
             });
         });
@@ -590,6 +599,12 @@ public partial class OmabiloApp
                 }
             });
 
+            if (missing.Count == 0 && SecretOrNull("GOOGLE_OAUTH_PUBLISHED") != "true")
+            {
+                v.Alert("Gmail access is in Google's testing stage", tone: SemanticTone.Info,
+                    description: "Until Google finishes reviewing Omabilo, only Google accounts the app owner has added as testers can connect Gmail. If Google says \"Access blocked\", ask the owner to add your address. Everything else in Omabilo works without Gmail.");
+            }
+
             if (missing.Count > 0)
             {
                 v.Alert("Gmail connection isn't set up on this server yet", tone: SemanticTone.Warning,
@@ -619,6 +634,7 @@ public partial class OmabiloApp
             return;
         }
 
+        view.Text([Text.H4, "m-0 text-foreground"], Greeting());
         LoadStates(view);
 
         if (_my.Value is not { } snap)
@@ -1610,6 +1626,15 @@ public partial class OmabiloApp
                 }
                 else
                 {
+                    card.Row(["items-center gap-3 min-w-0"], content: r =>
+                    {
+                        Avatar(r, _me.Value);
+                        r.Column(["gap-0 min-w-0"], content: c =>
+                        {
+                            c.Text([Text.Label, "truncate text-foreground"], _me.Value.Name);
+                            c.Text([Text.Caption, "truncate text-muted-foreground"], _me.Value.Email ?? "Signed in");
+                        });
+                    });
                     card.Text([Text.BodySm, "text-muted-foreground"], "Signs you out of Omabilo, or deletes your account and all its data after a grace period you can cancel.");
                     card.Row(["gap-2 flex-wrap"], content: r =>
                     {

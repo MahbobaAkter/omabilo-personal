@@ -83,7 +83,7 @@ public partial class OmabiloApp
                 r.Badge("Demo data only", tone: SemanticTone.Neutral, size: BadgeSize.Sm);
             });
             view.Text([Text.Body, "text-foreground/90"],
-                "Pick a fictional example, or paste a fictional invoice email. Omabilo explains what it is and what to do next. Then tell us what you think.");
+                "Pick a fictional example, paste a fictional invoice email, or upload a sample invoice PDF. Omabilo explains what it is and what to do next. Then tell us what you think.");
             view.Row(["items-start gap-2 rounded-xl bg-muted p-3"], content: r =>
             {
                 r.Icon([Icon.Sm, "text-muted-foreground mt-0.5 shrink-0"], name: "info");
@@ -97,7 +97,7 @@ public partial class OmabiloApp
         {
             StepTitle(view, 1, "Choose a message");
 
-            view.Grid(["grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3"], content: grid =>
+            view.Grid(["grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"], content: grid =>
             {
                 var icons = new Dictionary<string, string> { ["normal"] = "receipt", ["reminder"] = "alarm-clock", ["unclear"] = "circle-help" };
 
@@ -107,9 +107,14 @@ public partial class OmabiloApp
                 }
 
                 ScenarioCard(grid, "paste", "Paste a message", "Use your own fictional invoice text", "clipboard-paste", "Fictional only");
+                ScenarioCard(grid, "upload", "Upload a PDF", "An invoice, receipt or payslip PDF, read like a Gmail attachment", "file-up", "Not saved");
             });
 
-            if (_labScenario.Value == "paste")
+            if (_labScenario.Value == "upload")
+            {
+                RenderLabUpload(view);
+            }
+            else if (_labScenario.Value == "paste")
             {
                 view.Box([Card.Default, "p-4 sm:p-5 flex flex-col gap-2"], content: v =>
                 {
@@ -143,12 +148,16 @@ public partial class OmabiloApp
             view.Row(["items-center gap-3 flex-wrap"], content: r =>
             {
                 r.Button([Button.PrimaryLg, "min-h-11 w-full sm:w-auto"], text: "Analyze invoice", icon: "scan-text",
-                    disabled: _labScenario.Value == "",
+                    disabled: _labScenario.Value == "" || (_labScenario.Value == "upload" && _labUploadMail.Value == null),
                     onClick: AnalyzeInvoice);
 
                 if (_labScenario.Value == "")
                 {
                     r.Text([Text.BodySm, "text-muted-foreground"], "Choose a message above first.");
+                }
+                else if (_labScenario.Value == "upload" && _labUploadMail.Value == null)
+                {
+                    r.Text([Text.BodySm, "text-muted-foreground"], "Upload a PDF above first.");
                 }
             });
 
@@ -158,10 +167,15 @@ public partial class OmabiloApp
             }
         });
 
-        if (_labResult.Value is { } result)
+        if (_labUploadResult.Value is { } uploaded)
+        {
+            RenderUploadResult(view, uploaded);
+            RenderFeedbackForm(view, UploadSummary(uploaded));
+        }
+        else if (_labResult.Value is { } result)
         {
             RenderLabResult(view, result);
-            RenderFeedbackForm(view, result);
+            RenderFeedbackForm(view, $"{result.UrgencyLabel}. {result.WhatIsThis}");
         }
         else
         {
@@ -210,11 +224,19 @@ public partial class OmabiloApp
         _labScenario.Value = key;
         _labError.Value = null;
         _labResult.Value = null;
+        _labUploadResult.Value = null;
         ResetFeedback();
     }
 
     private void AnalyzeInvoice()
     {
+        if (_labScenario.Value == "upload")
+        {
+            AnalyzeUpload();
+            return;
+        }
+
+        _labUploadResult.Value = null;
         var scenario = InvoiceTestScenarios.All(Today).FirstOrDefault(s => s.Key == _labScenario.Value);
         var text = scenario?.Text ?? _labPasted.Value;
         var problem = _labScenario.Value == "" ? "Choose a message first." : InvoiceExplainer.Validate(text);
@@ -433,12 +455,12 @@ public partial class OmabiloApp
         _fbSaved.Value = null;
     }
 
-    private TesterFeedback BuildFeedback(InvoiceExplanation r) => new(
+    private TesterFeedback BuildFeedback(string resultSummary) => new(
         $"FB-{Guid.NewGuid():N}"[..11].ToUpperInvariant(),
         DateTime.UtcNow,
         TesterTag(),
         _labResultFrom.Value,
-        $"{r.UrgencyLabel}. {r.WhatIsThis}",
+        resultSummary,
         int.TryParse(_fbRating.Value, out var n) ? n : 0,
         _fbClear.Value,
         TesterFeedback.Clean(_fbMissing.Value),
@@ -454,7 +476,7 @@ public partial class OmabiloApp
     private static string TesterTagFor(string userId) =>
         "T-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("omabilo-test:" + userId)))[..8];
 
-    private void RenderFeedbackForm(UIView view, InvoiceExplanation r)
+    private void RenderFeedbackForm(UIView view, string resultSummary)
     {
         view.Column(["gap-3"], key: "lab-feedback", content: view =>
         {
@@ -481,6 +503,8 @@ public partial class OmabiloApp
                         row.Button([Button.PrimaryMd], text: "Try another message", icon: "rotate-ccw", onClick: () =>
                         {
                             _labResult.Value = null;
+                            _labUploadResult.Value = null;
+                            _labUploadMail.Value = null;
                             _labScenario.Value = "";
                             ResetFeedback();
                         });
@@ -524,14 +548,14 @@ public partial class OmabiloApp
                 if (_fbError.Value is { } error)
                 {
                     form.Alert("Your feedback wasn't saved", tone: SemanticTone.Error, description: error, content: c =>
-                        c.Row(["gap-2 flex-wrap pt-2"], content: row => FeedbackCopyButtons(row, BuildFeedback(r))));
+                        c.Row(["gap-2 flex-wrap pt-2"], content: row => FeedbackCopyButtons(row, BuildFeedback(resultSummary))));
                 }
 
                 form.Button([Button.PrimaryLg, "min-h-11 w-full sm:w-auto self-start"],
                     text: _fbSaving.Value ? "Saving…" : _fbError.Value != null ? "Try again" : "Submit feedback",
                     icon: _fbSaving.Value ? "loader-circle" : "send",
                     disabled: _fbSaving.Value,
-                    onClick: async () => await SubmitFeedbackAsync(r));
+                    onClick: async () => await SubmitFeedbackAsync(resultSummary));
             });
         });
     }
@@ -583,7 +607,7 @@ public partial class OmabiloApp
             }));
     }
 
-    private async Task SubmitFeedbackAsync(InvoiceExplanation r)
+    private async Task SubmitFeedbackAsync(string resultSummary)
     {
         if (_fbSaving.Value)
         {
@@ -600,7 +624,7 @@ public partial class OmabiloApp
 
         _fbSaving.Value = true;
         _fbError.Value = null;
-        var feedback = BuildFeedback(r);
+        var feedback = BuildFeedback(resultSummary);
 
         try
         {

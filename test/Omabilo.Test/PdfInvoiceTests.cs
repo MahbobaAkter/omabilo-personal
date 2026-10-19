@@ -114,6 +114,32 @@ public class PdfInvoiceTests
         Assert.True(rig.Store.Messages[("alice", "m-pdf")].IsFinancial);
     }
 
+    /// <summary>The invoice lab's "Upload a PDF": a file with no email around it (no sender, body or
+    /// financial subject) is read the same way as a Gmail attachment.</summary>
+    [Fact]
+    public async Task An_uploaded_pdf_with_no_email_around_it_is_read_from_the_document_alone()
+    {
+        var today = new DateTime(2026, 10, 18);
+        var data = KuuraInvoice(today);
+        var read = await new PdfAttachmentReader().ReadAsync("scan_0042.pdf", "application/pdf", data, default);
+        Assert.Equal(AttachmentStatus.Read, read.Status);
+
+        var doc = new MailAttachment("scan_0042.pdf", "application/pdf", data.Length, read.Text, read.Problem, read.Status, read.Pages);
+        var mail = new MailMessage("lab-upload", "lab-upload", "", "scan_0042", today, "", "", [doc]);
+        var cls = MessageClassifier.Classify(mail.From, mail.Subject, RecordExtractor.FullText(mail));
+        Assert.True(cls.IsFinancial);
+
+        var item = RecordExtractor.Extract("invoice-lab", mail, cls, today);
+        Assert.Equal(FinKind.Invoice, item.Kind);
+        Assert.Equal("Kuura Energia Oy", item.Counterparty);
+        Assert.Equal(58.40m, item.Amount);
+        Assert.Equal(today.AddDays(28), item.DueDate);
+        Assert.Equal("1234561", item.Reference);
+        Assert.NotNull(item.Iban);
+        Assert.NotNull(item.Advice);
+        Assert.All(item.FieldSources.Where(f => f.Field is "Amount" or "Due date"), f => Assert.StartsWith("PDF", f.Source));
+    }
+
     [Fact]
     public async Task Repeated_notices_and_a_rescan_never_duplicate_a_pdf_invoice()
     {
