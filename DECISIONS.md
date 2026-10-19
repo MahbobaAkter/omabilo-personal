@@ -68,6 +68,12 @@ Each entry is a choice that would be costly to undo or rediscover.
   - A `[Cron]` sweep every 15 minutes, plus "Sync now".
   - The first scan is bounded (90 days and 300 messages by default, both configurable). After that, sync is incremental using Gmail's history ids, with a bounded rescan when the history has expired.
   - A per-user claim column prevents overlapping runs. Failures back off exponentially.
+- **Forwarding is the way in for everyone (chosen 19 Oct 2026).** Google allows the restricted `gmail.readonly` scope only for listed testers until the app passes verification and a yearly CASA audit, so it can't serve people whose addresses the owner doesn't know.
+  - Each signed-in user gets a private address `bills-<12 random chars>@<app hostname>` (IKON inbound email, `ikon inbox enable`). They forward bills by hand or with a Gmail/Outlook rule. Works with any provider, and gives Omabilo no mailbox access.
+  - The address alone decides whose data a message becomes; mail to an unknown or replaced address is deleted unread. "Get a new address" replaces a leaked one.
+  - Forwarded mail goes through the same classifier, extractor and filing as Gmail mail, with ids prefixed `fwd:`. The platform's copy is deleted after reading; only the extracted record and excerpt stay, so forwarded items can't be re-read.
+  - Gmail's forwarding-confirmation email is shown to the person (code, and a link only if it points at `mail.google.com`/`mail-settings.google.com`), never filed.
+  - Connect Gmail stays for testers.
 - **Numbers come from code, never from AI.** Extraction and cash flow are deterministic and tested. AI (opt-in per user, EU-pinned, redacted input) only explains, and its output is validated: a fact naming a number that isn't in the source is dropped.
 - **Statuses never overclaim:**
   - "Overdue" means the due date has passed with no payment reported or confirmed. It doesn't mean verified unpaid.

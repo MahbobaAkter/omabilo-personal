@@ -55,6 +55,22 @@ public interface ICompanionStore
 
     /// <summary>Retention: expired sign-in states, old non-financial message ids and old audit rows.</summary>
     Task PruneAsync(DateTime now, CancellationToken ct);
+
+    /// <summary>Records a message as taken in one step; false when it was already taken, so a trigger
+    /// and a sweep reaching the same email never both file it.</summary>
+    Task<bool> TryClaimMessageAsync(ProcessedMessage message, CancellationToken ct);
+
+    // ── Forwarding addresses ──
+
+    Task<ForwardAddress?> GetForwardAsync(string userId, CancellationToken ct);
+
+    /// <summary>The person whose address this token is, or null.</summary>
+    Task<ForwardAddress?> FindForwardAsync(string token, CancellationToken ct);
+
+    /// <summary>Keeps an existing address (two tabs opening at once get the same one), else stores this one.</summary>
+    Task<ForwardAddress> GetOrCreateForwardAsync(ForwardAddress candidate, CancellationToken ct);
+
+    Task SaveForwardAsync(ForwardAddress address, CancellationToken ct);
 }
 
 public sealed record AuditEntry(DateTime AtUtc, string Action, string? ItemId);
@@ -155,6 +171,12 @@ public sealed class PostgresCompanionStore(Func<CancellationToken, Task<DbConnec
             last_push_sync_started_utc timestamptz
         );
         create index if not exists om_connections_email on om_connections (lower(google_email));
+        create table if not exists om_forward_addresses (
+            user_id text primary key,
+            token text not null unique,
+            data jsonb not null,
+            updated_utc timestamptz not null
+        );
         """;
 
     private async Task<DbConnection> OpenAsync(CancellationToken ct)
@@ -531,7 +553,7 @@ public sealed class PostgresCompanionStore(Func<CancellationToken, Task<DbConnec
     {
         await using var conn = await OpenAsync(ct);
 
-        foreach (var table in new[] { "om_items", "om_messages", "om_settings", "om_audit", "om_oauth_states", "om_gmail_watch", "om_connections" })
+        foreach (var table in new[] { "om_items", "om_messages", "om_settings", "om_audit", "om_oauth_states", "om_gmail_watch", "om_connections", "om_forward_addresses" })
         {
             await using var cmd = Cmd(conn, $"delete from {table} where user_id = @u", ("u", userId));
             await cmd.ExecuteNonQueryAsync(ct);
@@ -550,6 +572,66 @@ public sealed class PostgresCompanionStore(Func<CancellationToken, Task<DbConnec
             ("now", Utc(now)), ("nf", Utc(now.AddDays(-NonFinancialRetentionDays))), ("audit", Utc(now.AddDays(-AuditRetentionDays))));
         await cmd.ExecuteNonQueryAsync(ct);
     }
+
+    public async Task<bool> TryClaimMessageAsync(ProcessedMessage m, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn,
+            """
+            insert into om_messages (user_id, gmail_id, received_utc, is_financial, kind, item_id, error, processed_utc)
+            values (@u, @g, @rec, @fin, @kind, @item, @err, @proc)
+            on conflict (user_id, gmail_id) do nothing
+            """,
+            ("u", m.UserId), ("g", m.GmailId), ("rec", Utc(m.ReceivedUtc)), ("fin", m.IsFinancial), ("kind", m.Kind.ToString()),
+            ("item", m.ItemId), ("err", m.Error), ("proc", Utc(m.ProcessedUtc)));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    // ── Forwarding addresses ────────────────────────────────────────────────
+
+    public async Task<ForwardAddress?> GetForwardAsync(string userId, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn, "select data::text from om_forward_addresses where user_id = @u", ("u", userId));
+        return ReadForward(await cmd.ExecuteScalarAsync(ct) as string, userId);
+    }
+
+    public async Task<ForwardAddress?> FindForwardAsync(string token, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn, "select user_id, data::text from om_forward_addresses where token = @t", ("t", token));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        return await r.ReadAsync(ct) ? ReadForward(r.GetString(1), r.GetString(0)) : null;
+    }
+
+    public async Task<ForwardAddress> GetOrCreateForwardAsync(ForwardAddress candidate, CancellationToken ct)
+    {
+        await using (var conn = await OpenAsync(ct))
+        {
+            await using var cmd = Cmd(conn,
+                "insert into om_forward_addresses (user_id, token, data, updated_utc) values (@u, @t, cast(@data as jsonb), @now) on conflict (user_id) do nothing",
+                ("u", candidate.UserId), ("t", candidate.Token), ("data", JsonSerializer.Serialize(candidate, CompanionJson.Options)), ("now", DateTime.UtcNow));
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        return await GetForwardAsync(candidate.UserId, ct) ?? candidate;
+    }
+
+    public async Task SaveForwardAsync(ForwardAddress a, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = Cmd(conn,
+            """
+            insert into om_forward_addresses (user_id, token, data, updated_utc) values (@u, @t, cast(@data as jsonb), @now)
+            on conflict (user_id) do update set token = excluded.token, data = excluded.data, updated_utc = excluded.updated_utc
+            """,
+            ("u", a.UserId), ("t", a.Token), ("data", JsonSerializer.Serialize(a, CompanionJson.Options)), ("now", DateTime.UtcNow));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    // The row's user id wins over anything in the JSON
+    private static ForwardAddress? ReadForward(string? json, string userId) =>
+        json == null ? null : JsonSerializer.Deserialize<ForwardAddress>(json, CompanionJson.Options) is { } a ? a with { UserId = userId } : null;
 
     // ── ADO helpers ─────────────────────────────────────────────────────────
 

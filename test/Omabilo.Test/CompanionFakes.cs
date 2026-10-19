@@ -160,6 +160,7 @@ public sealed class InMemoryCompanionStore : ICompanionStore
             Settings.Remove(userId);
             Connections.Remove(userId);
             Watches.Remove(userId);
+            Forwards.Remove(userId);
             Audit.RemoveAll(a => a.UserId == userId);
         }
 
@@ -175,6 +176,25 @@ public sealed class InMemoryCompanionStore : ICompanionStore
 
         return Task.CompletedTask;
     }
+
+    public readonly Dictionary<string, ForwardAddress> Forwards = new();
+
+    public Task<bool> TryClaimMessageAsync(ProcessedMessage m, CancellationToken ct) { lock (_gate) return Task.FromResult(Messages.TryAdd((m.UserId, m.GmailId), m)); }
+
+    public Task<ForwardAddress?> GetForwardAsync(string userId, CancellationToken ct) { lock (_gate) return Task.FromResult(Forwards.GetValueOrDefault(userId)); }
+
+    public Task<ForwardAddress?> FindForwardAsync(string token, CancellationToken ct) { lock (_gate) return Task.FromResult(Forwards.Values.FirstOrDefault(f => f.Token == token)); }
+
+    public Task<ForwardAddress> GetOrCreateForwardAsync(ForwardAddress candidate, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            Forwards.TryAdd(candidate.UserId, candidate);
+            return Task.FromResult(Forwards[candidate.UserId]);
+        }
+    }
+
+    public Task SaveForwardAsync(ForwardAddress a, CancellationToken ct) { lock (_gate) Forwards[a.UserId] = a; return Task.CompletedTask; }
 }
 
 public sealed record FakeMail(string Id, string From, string Subject, string Body, DateTime Received, long HistoryId, byte[]? Pdf = null, string? Html = null,

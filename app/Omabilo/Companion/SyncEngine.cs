@@ -644,34 +644,7 @@ public sealed class SyncEngine(
 
             var full = await Retry.GmailAsync(() => gmail.GetFullAsync(token, id, ct), ct, delay: delay);
             var mail = await ToMailAsync(token, full, settings, ct);
-            var cls = MessageClassifier.Classify(mail.From, mail.Subject, RecordExtractor.FullText(mail));
-
-            if (!cls.IsFinancial && UnreadDocument(mail) is { } guess)
-            {
-                cls = guess;
-            }
-            else if (!cls.IsFinancial)
-            {
-                await store.SaveMessageAsync(new ProcessedMessage(userId, id, meta.ReceivedUtc, false, FinKind.NotFinancial, null, null, clock()), ct);
-                return Outcome.NotFinancial;
-            }
-
-            var result = Outcome.Updated;
-            string? firstId = null;
-
-            foreach (var extracted in ExtractAll(userId, mail, cls, ownerEmail))
-            {
-                var item = await ExplainAsync(extracted, mail, settings, budget, ct);
-                var (saved, outcome) = await FileItemAsync(userId, WithRetryPlan(item, null), ct);
-                firstId ??= saved.Id;
-                if (outcome == Outcome.Created) result = Outcome.Created;
-
-                var read = saved.Attachments.Count(a => a.WasRead);
-                log($"sync: message {id} for user {userId}: {item.Kind}, {item.Attachments.Count} attachment(s), {read} read, outcome {outcome}");
-            }
-
-            await store.SaveMessageAsync(new ProcessedMessage(userId, id, meta.ReceivedUtc, true, cls.Kind, firstId, null, clock()), ct);
-            return result;
+            return (await FileMailAsync(userId, id, meta.ReceivedUtc, mail, ownerEmail, settings, budget, ct)).Outcome;
         }
         catch (Exception ex) when (ex is not (GoogleAuthException or OperationCanceledException) && !(ex is GmailApiException { Status: 401 or 429 } or GmailApiException { Retryable: true }))
         {
@@ -679,6 +652,125 @@ public sealed class SyncEngine(
             log($"sync: message {id} for user {userId} failed with {ex.GetType().Name}");
             await store.SaveMessageAsync(new ProcessedMessage(userId, id, clock(), false, FinKind.NotFinancial, null, ex.GetType().Name, clock()), ct);
             return Outcome.Failed;
+        }
+    }
+
+    /// <summary>Classifies a decoded email and files what it holds: the part Gmail and forwarded mail share.</summary>
+    private async Task<(Outcome Outcome, int Created)> FileMailAsync(string userId, string id, DateTime receivedUtc, MailMessage mail, string? ownerEmail,
+        CompanionSettings settings, AiBudget budget, CancellationToken ct)
+    {
+        var cls = MessageClassifier.Classify(mail.From, mail.Subject, RecordExtractor.FullText(mail));
+
+        if (!cls.IsFinancial && UnreadDocument(mail) is { } guess)
+        {
+            cls = guess;
+        }
+        else if (!cls.IsFinancial)
+        {
+            await store.SaveMessageAsync(new ProcessedMessage(userId, id, receivedUtc, false, FinKind.NotFinancial, null, null, clock()), ct);
+            return (Outcome.NotFinancial, 0);
+        }
+
+        var result = Outcome.Updated;
+        var created = 0;
+        string? firstId = null;
+
+        foreach (var extracted in ExtractAll(userId, mail, cls, ownerEmail))
+        {
+            var item = await ExplainAsync(extracted, mail, settings, budget, ct);
+
+            // A forwarded email can't be fetched again, so nothing is planned for a later try
+            item = BillForwarding.IsForwardedId(id) ? item with { AttachmentRetries = 0, AttachmentRetryAfterUtc = null } : WithRetryPlan(item, null);
+
+            var (saved, outcome) = await FileItemAsync(userId, item, ct);
+            firstId ??= saved.Id;
+
+            if (outcome == Outcome.Created)
+            {
+                result = Outcome.Created;
+                created++;
+            }
+
+            var read = saved.Attachments.Count(a => a.WasRead);
+            log($"sync: message {id} for user {userId}: {item.Kind}, {item.Attachments.Count} attachment(s), {read} read, outcome {outcome}");
+        }
+
+        await store.SaveMessageAsync(new ProcessedMessage(userId, id, receivedUtc, true, cls.Kind, firstId, null, clock()), ct);
+        return (result, created);
+    }
+
+    // ── Forwarded bills ─────────────────────────────────────────────────────
+
+    /// <summary>The person's forwarding address, made the first time they ask for it.</summary>
+    public async Task<ForwardAddress> ForwardAddressAsync(string userId, CancellationToken ct) =>
+        await store.GetForwardAsync(userId, ct)
+            ?? await store.GetOrCreateForwardAsync(new ForwardAddress { UserId = userId, Token = BillForwarding.NewToken(), CreatedUtc = clock() }, ct);
+
+    /// <summary>Replaces the address: mail to the old one is ignored from now on.</summary>
+    public async Task<ForwardAddress> NewForwardAddressAsync(string userId, CancellationToken ct)
+    {
+        var fresh = new ForwardAddress { UserId = userId, Token = BillForwarding.NewToken(), CreatedUtc = clock() };
+        await store.SaveForwardAsync(fresh, ct);
+        await store.AddAuditAsync(userId, "forward_address_replaced", null, ct);
+        return fresh;
+    }
+
+    /// <summary>Files one email sent to a forwarding address for the person the address belongs to.
+    /// The address alone decides whose it is; mail to an unknown address is never read further.</summary>
+    public async Task<ForwardResult> ImportForwardedAsync(ForwardedEmail email, CancellationToken ct)
+    {
+        if (BillForwarding.TokenOf(email.Recipient) is not { } token || await store.FindForwardAsync(token, ct) is not { } address)
+        {
+            return new(ForwardOutcome.UnknownAddress, null);
+        }
+
+        var userId = address.UserId;
+        var now = clock();
+
+        if (BillForwarding.GmailConfirmation(email.From, email.Subject, email.BodyText) is { } confirm)
+        {
+            await store.SaveForwardAsync(address with
+            {
+                GmailConfirmCode = confirm.Code,
+                GmailConfirmLink = confirm.Link,
+                GmailConfirmFor = confirm.ForAddress,
+                GmailConfirmUtc = now,
+            }, ct);
+            await store.AddAuditAsync(userId, "forward_gmail_confirmation", null, ct);
+            return new(ForwardOutcome.GmailConfirmation, userId);
+        }
+
+        var id = BillForwarding.IdPrefix + email.Id;
+
+        if (!await store.TryClaimMessageAsync(new ProcessedMessage(userId, id, email.ReceivedUtc, false, FinKind.NotFinancial, null, "processing", now), ct))
+        {
+            return new(ForwardOutcome.AlreadyDone, userId);
+        }
+
+        var settings = await store.GetSettingsAsync(userId, ct);
+
+        // A hand-forwarded email comes from the person; an automatic forward keeps the biller as sender
+        var owner = BillForwarding.IsManualForward(email.Subject, email.BodyText) ? InvoiceAnalysis.Address(email.From) : null;
+        var full = new GmailFullMessage(
+            new GmailMessageMeta(id, id, email.From, email.Subject, email.ReceivedUtc, BillForwarding.Snippet(email.BodyText), null, email.Files.Count > 0),
+            email.BodyText,
+            email.Files.Select((f, i) => new GmailAttachmentRef(f.FileName, f.MimeType, f.Size, $"file-{i}", f.Data)).ToList());
+
+        try
+        {
+            var mail = await ToMailAsync("", full, settings, ct);
+            var (outcome, created) = await FileMailAsync(userId, id, email.ReceivedUtc, mail, owner, settings,
+                new AiBudget(settings.AiEnabled && ai != null ? 5 : 0), ct);
+
+            await store.SaveForwardAsync(address with { LastReceivedUtc = now, ReceivedCount = address.ReceivedCount + 1 }, ct);
+            await store.AddAuditAsync(userId, "forward_received", null, ct);
+            return new(outcome == Outcome.NotFinancial ? ForwardOutcome.NotFinancial : ForwardOutcome.Filed, userId, created);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log($"forwarded message {email.Id} for user {userId} failed with {ex.GetType().Name}");
+            await store.SaveMessageAsync(new ProcessedMessage(userId, id, email.ReceivedUtc, false, FinKind.NotFinancial, null, ex.GetType().Name, clock()), ct);
+            return new(ForwardOutcome.Failed, userId);
         }
     }
 
@@ -985,7 +1077,7 @@ public sealed class SyncEngine(
         var items = await store.GetItemsAsync(userId, ct);
         var due = items
             .Where(i => i.AttachmentRetryAfterUtc is { } at && at <= now && i.AttachmentRetries < options.MaxAttachmentRetries)
-            .Concat(items.Where(i => i.AnalysisVersion < InvoiceAnalysis.CurrentVersion && i.Sources.Count > 0))
+            .Concat(items.Where(i => i.AnalysisVersion < InvoiceAnalysis.CurrentVersion && CanReread(i)))
             .DistinctBy(i => i.Id)
             .Take(options.RefreshBatch)
             .ToList();
@@ -1011,10 +1103,13 @@ public sealed class SyncEngine(
         return done;
     }
 
+    /// <summary>True when the item came from Gmail; a forwarded email isn't kept, so it can't be read again.</summary>
+    public static bool CanReread(FinancialItem item) => item.Sources.Any(s => !BillForwarding.IsForwardedId(s.GmailId));
+
     /// <summary>Reads an item's messages again with the current rules, keeping the person's edits and decisions.</summary>
     public async Task<FinancialItem?> ReprocessAsync(string userId, string itemId, CancellationToken ct)
     {
-        if (await store.GetItemAsync(userId, itemId, ct) is not { } old || await store.GetConnectionAsync(userId, ct) is not { } c)
+        if (await store.GetItemAsync(userId, itemId, ct) is not { } old || !CanReread(old) || await store.GetConnectionAsync(userId, ct) is not { } c)
         {
             return null;
         }
@@ -1028,7 +1123,8 @@ public sealed class SyncEngine(
 
     private async Task<FinancialItem> RereadAsync(string userId, string token, FinancialItem old, string? ownerEmail, CompanionSettings settings, AiBudget budget, CancellationToken ct)
     {
-        var original = old.Sources.FirstOrDefault(s => s.Role == "original") ?? old.Sources.FirstOrDefault();
+        var gmailSources = old.Sources.Where(s => !BillForwarding.IsForwardedId(s.GmailId)).ToList();
+        var original = gmailSources.FirstOrDefault(s => s.Role == "original") ?? gmailSources.FirstOrDefault();
 
         if (original == null)
         {
@@ -1061,7 +1157,7 @@ public sealed class SyncEngine(
         var (fresh, firstMail) = await ReadSourceAsync(original);
 
         // Reminders that were merged in are merged again, so a re-read keeps the latest amount and due date
-        foreach (var reminder in old.Sources.Where(s => s.Role == "reminder" && s.GmailId != original.GmailId))
+        foreach (var reminder in gmailSources.Where(s => s.Role == "reminder" && s.GmailId != original.GmailId))
         {
             try
             {

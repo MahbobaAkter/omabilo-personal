@@ -272,7 +272,8 @@ public partial class OmabiloApp
             await conn.OpenAsync(ct);
             await EnsureJobTableAsync(conn, ct);
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = "select job, last_run_utc, last_result from om_job_runs where job in (@sync, @push, @rejected)";
+            cmd.CommandText = "select job, last_run_utc, last_result from om_job_runs where job in (@sync, @push, @rejected, @forward)";
+            AddParam(cmd, "forward", ForwardJobKey);
             AddParam(cmd, "sync", SyncJobKey);
             AddParam(cmd, "push", PushAcceptedKey);
             AddParam(cmd, "rejected", PushRejectedKey);
@@ -322,6 +323,12 @@ public partial class OmabiloApp
                 lastNotificationUtc = overview?.LastPushUtc,
                 lastAccepted = jobs.TryGetValue(PushAcceptedKey, out var a) ? new { at = a.At, result = a.Result } : null,
                 lastRejected = jobs.TryGetValue(PushRejectedKey, out var rj) ? new { at = rj.At, result = rj.Result } : null,
+            },
+            billForwarding = new
+            {
+                inboundDomain = await InboundDomainAsync(),
+                lastSweepUtc = jobs.TryGetValue(ForwardJobKey, out var f) ? f.At : (DateTime?)null,
+                lastSweepResult = jobs.TryGetValue(ForwardJobKey, out var f2) ? f2.Result : null,
             },
             checkedUtc = DateTime.UtcNow,
         };

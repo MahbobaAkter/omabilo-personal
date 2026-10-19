@@ -39,6 +39,8 @@ public partial class OmabiloApp
     private readonly ClientReactive<bool> _sAi = new(false);
     private readonly ClientReactive<string?> _sMessage = new((string?)null);
     private readonly ClientReactive<DateTimeOffset?> _removalDate = new((DateTimeOffset?)null);
+    private readonly ClientReactive<string?> _forwardDomain = new((string?)null);
+    private readonly ClientReactive<bool> _forwardHelp = new(false);
 
     /// <summary>The signed-in person's id, or null for a guest. Everything personal hangs off this.</summary>
     private string? MyUserId => app.CurrentClientContext is { IsAnonymous: false } ? ReactiveScope.UserIdOrNull : null;
@@ -112,6 +114,7 @@ public partial class OmabiloApp
         {
             var snapshot = await Companion.LoadAsync(uid, CancellationToken.None);
             _my.Value = snapshot;
+            _forwardDomain.Value = await InboundDomainAsync();
             FillSettingsForm(snapshot.Settings);
         }
         catch (Exception ex)
@@ -492,7 +495,7 @@ public partial class OmabiloApp
             IconTile(v, "lock", "brand", "w-12 h-12");
             v.Heading("Use Omabilo with your own email", style: [Text.H4, "m-0 text-foreground"], level: 2);
             v.Text([Text.Body, "text-foreground/90"],
-                "Sign in to connect your Gmail. Omabilo then finds your bills, payslips and receipts, explains them and plans your money until payday. Signing in doesn't give Omabilo access to your email; connecting Gmail is a separate step you choose.");
+                "Sign in to get your own private Omabilo address. Forward bills, payslips and receipts to it from any email, and Omabilo reads them, explains them and plans your money until payday. Signing in doesn't give Omabilo access to your email.");
             v.Text([Text.BodySm, "text-muted-foreground"],
                 "Any account works: Google, Apple, Microsoft, Finnish bank ID (Signicat), a one-time code sent to your email, or a passkey. A new account is created the first time you sign in, and its data is visible only to you.");
             v.Row(["gap-2 flex-wrap"], content: r =>
@@ -570,14 +573,117 @@ public partial class OmabiloApp
         }
     }
 
-    private void ConnectGmailCard(UIView view)
+    /// <summary>The person's private address for forwarding bills: works with any email provider and
+    /// gives Omabilo no access to the mailbox. compact shows just the address and the copy button.</summary>
+    private void ForwardBillsCard(UIView view, CompanionSnapshot snap, bool compact)
+    {
+        var domain = _forwardDomain.Value;
+        var address = snap.Forward is { } f && domain != null ? $"{f.Token}@{domain}" : null;
+
+        view.Box([compact ? Card.Default : Card.Elevated, compact ? "p-4 flex flex-col gap-3" : "p-6 sm:p-8 flex flex-col gap-4"], content: v =>
+        {
+            if (!compact)
+            {
+                IconTile(v, "forward", "brand", "w-12 h-12");
+                v.Heading("Forward your bills to Omabilo", style: [Text.H4, "m-0 text-foreground"], level: 2);
+                v.Text([Text.Body, "text-foreground/90"],
+                    "This is your own private Omabilo address. Forward a bill, payment reminder, payslip or receipt to it from any email (Gmail, Outlook, iCloud, work mail) and it appears here, read and explained, within a minute or two. PDF attachments are read too.");
+            }
+            else
+            {
+                v.Row(["items-center gap-2"], content: r =>
+                {
+                    r.Icon([Icon.Sm, "text-brand-secondary"], name: "forward");
+                    r.Text([Text.BodyStrong, "text-foreground"], "Forward bills to your Omabilo address");
+                });
+            }
+
+            if (address == null)
+            {
+                v.Alert("Receiving email isn't turned on yet", tone: SemanticTone.Warning,
+                    description: "The app owner still needs to turn on receiving email for Omabilo. Until then, use Upload a PDF in the Financial Inbox.");
+                return;
+            }
+
+            v.Column(["gap-2 sm:flex-row sm:items-center"], content: r =>
+            {
+                r.Text(["font-mono text-sm sm:text-base text-foreground bg-muted rounded-xl px-3 py-2.5 break-all flex-1 min-w-0"], address);
+                r.ActionButton([compact ? Button.OutlineMd : Button.PrimaryMd, "shrink-0"], action: ActionKind.CopyToClipboard,
+                    options: new CopyToClipboardActionOptions { Text = address },
+                    ariaLabel: "Copy address",
+                    content: b => b.Row(["items-center gap-2"], content: inner =>
+                    {
+                        inner.Icon([Icon.Sm], name: "copy");
+                        inner.Text([], "Copy address");
+                    }));
+            });
+
+            if (snap.Forward is { GmailConfirmUtc: { } asked } fa && (fa.LastReceivedUtc == null || fa.LastReceivedUtc < asked || DateTime.UtcNow - asked < TimeSpan.FromDays(2)))
+            {
+                v.Alert("Gmail is asking you to confirm forwarding", tone: SemanticTone.Info,
+                    description: $"{(fa.GmailConfirmFor != null ? $"{fa.GmailConfirmFor} wants" : "Gmail wants")} to forward mail to Omabilo automatically." +
+                        (fa.GmailConfirmCode != null ? $" Confirmation code: {fa.GmailConfirmCode}. Enter it in Gmail's forwarding settings," : " Approve it") +
+                        " or open Google's confirmation page below. Only do this if you set up the forwarding yourself.",
+                    action: fa.GmailConfirmLink is { } link ? a => a.Link([Button.OutlineSm], text: "Open Google's confirmation page", href: link, target: "_blank", rel: "noopener noreferrer") : null);
+            }
+
+            if (snap.Forward is { LastReceivedUtc: { } last, ReceivedCount: var count })
+            {
+                v.Text([Text.Caption, "text-muted-foreground"], $"{count} email{(count == 1 ? "" : "s")} received · last one {Ago(last)}");
+            }
+
+            if (compact)
+            {
+                return;
+            }
+
+            v.Column(["gap-2"], content: list =>
+            {
+                foreach (var line in new[]
+                {
+                    "Only email sent to this address is read. Omabilo never gets access to your mailbox and never asks for a password.",
+                    "Keep the address private, like a phone number: anything sent to it lands in your Omabilo. You can swap it for a new one in Connections & privacy.",
+                    "Omabilo keeps the details it found and a short excerpt, then deletes the email itself.",
+                })
+                {
+                    list.Row(["items-start gap-2"], content: row =>
+                    {
+                        row.Icon([Icon.Sm, "text-brand-secondary mt-0.5 shrink-0"], name: "check");
+                        row.Text([Text.BodySm, "text-foreground/90"], line);
+                    });
+                }
+            });
+
+            v.Button([Button.GhostSm, "self-start"], text: _forwardHelp.Value ? "Hide how to forward automatically" : "How to forward bills automatically",
+                icon: _forwardHelp.Value ? "chevron-up" : "chevron-down", onClick: () => _forwardHelp.Value = !_forwardHelp.Value);
+
+            if (_forwardHelp.Value)
+            {
+                v.Column(["gap-3 rounded-xl bg-muted p-4"], content: help =>
+                {
+                    help.Text([Text.Label, "text-foreground"], "Gmail");
+                    help.Text([Text.BodySm, "text-foreground/90"],
+                        "1. Settings → See all settings → Forwarding and POP/IMAP → Add a forwarding address, and paste your Omabilo address. " +
+                        "2. Gmail sends a confirmation here: it appears on this card within a few minutes with the code. " +
+                        "3. Then create a filter (search for words like lasku, invoice, bill, kuitti) → Create filter → Forward it to your Omabilo address. Gmail then forwards only matching mail.");
+                    help.Text([Text.Label, "text-foreground"], "Outlook / Hotmail");
+                    help.Text([Text.BodySm, "text-foreground/90"],
+                        "Settings → Mail → Rules → Add new rule: choose a condition such as \"Subject includes\" lasku or invoice, then the action \"Forward to\" your Omabilo address.");
+                    help.Text([Text.Label, "text-foreground"], "Any other email");
+                    help.Text([Text.BodySm, "text-foreground/90"], "Press Forward on a bill and send it to your Omabilo address. That's all.");
+                });
+            }
+        });
+    }
+
+    private void ConnectGmailCard(UIView view, bool primary = true)
     {
         var missing = Engine.MissingConfiguration();
 
-        view.Box([Card.Elevated, "p-6 sm:p-8 flex flex-col gap-4"], content: v =>
+        view.Box([primary ? Card.Elevated : Card.Default, "p-6 sm:p-8 flex flex-col gap-4"], content: v =>
         {
             IconTile(v, "mail", "brand", "w-12 h-12");
-            v.Heading("Connect your Gmail", style: [Text.H4, "m-0 text-foreground"], level: 2);
+            v.Heading(primary ? "Connect your Gmail" : "Or connect Gmail directly", style: [Text.H4, "m-0 text-foreground"], level: 2);
             v.Text([Text.Body, "text-foreground/90"],
                 "Omabilo reads your email to find bills, payment reminders, payslips and receipts, and keeps them organised here. It only reads: it can't send, delete or change anything in your mailbox.");
 
@@ -613,7 +719,7 @@ public partial class OmabiloApp
 
             v.Row(["gap-2 flex-wrap items-center"], content: r =>
             {
-                r.Button([Button.PrimaryLg], text: _awaitingGmail.Value ? "Waiting for Google…" : "Connect Gmail", icon: "mail",
+                r.Button([primary ? Button.PrimaryLg : Button.OutlineLg], text: _awaitingGmail.Value ? "Waiting for Google…" : "Connect Gmail", icon: "mail",
                     disabled: missing.Count > 0 || _awaitingGmail.Value, onClick: ConnectGmailAsync);
 
                 if (_awaitingGmail.Value && _connectUrl.Value is { } url)
@@ -644,9 +750,14 @@ public partial class OmabiloApp
 
         if (snap.Connection == null)
         {
-            ConnectGmailCard(view);
+            ForwardBillsCard(view, snap, compact: snap.Items.Count > 0);
 
-            // Records kept from an earlier connection still count until the person deletes them
+            if (snap.Items.Count == 0)
+            {
+                ConnectGmailCard(view, primary: false);
+            }
+
+            // Forwarded bills, and records kept from an earlier connection, count until the person deletes them
             if (snap.Items.Count > 0)
             {
                 RenderOverviewTiles(view, snap);
@@ -964,13 +1075,18 @@ public partial class OmabiloApp
 
         if (snap.Connection == null && snap.Items.Count == 0)
         {
-            ConnectGmailCard(view);
+            ForwardBillsCard(view, snap, compact: false);
+            ConnectGmailCard(view, primary: false);
             return;
         }
 
         if (snap.Connection != null)
         {
             ConnectionBar(view, snap);
+        }
+        else
+        {
+            ForwardBillsCard(view, snap, compact: true);
         }
 
         var today = DateTime.UtcNow.Date;
@@ -1419,6 +1535,12 @@ public partial class OmabiloApp
                     if (a.Problem != null) b.Text([Text.BodySm, a.WasRead ? "text-muted-foreground" : "text-foreground"], a.Problem);
                     if (item.AttachmentRetryAfterUtc is { } retry && a.CanRetry) b.Text([Text.Caption, "text-muted-foreground"], $"Next automatic try after {retry:HH:mm} UTC.");
 
+                    if (BillForwarding.IsForwardedId(a.GmailId))
+                    {
+                        b.Text([Text.Caption, "text-muted-foreground"], "From an email you forwarded to Omabilo. The email itself isn't kept.");
+                        return;
+                    }
+
                     var link = gmailAccount != null
                         ? $"https://mail.google.com/mail/?authuser={Uri.EscapeDataString(gmailAccount)}#all/{Uri.EscapeDataString(a.GmailId)}"
                         : $"https://mail.google.com/mail/#all/{Uri.EscapeDataString(a.GmailId)}";
@@ -1445,6 +1567,12 @@ public partial class OmabiloApp
                     });
                     b.Text([Text.Caption, "text-muted-foreground"], $"{s.From} · {Day(s.ReceivedUtc)}");
                     b.Text(["text-xs font-mono whitespace-pre-wrap break-words text-foreground/80"], s.Excerpt);
+
+                    if (BillForwarding.IsForwardedId(s.GmailId))
+                    {
+                        b.Text([Text.Caption, "text-muted-foreground"], "Forwarded to your Omabilo address");
+                        return;
+                    }
 
                     var link = gmailAccount != null
                         ? $"https://mail.google.com/mail/?authuser={Uri.EscapeDataString(gmailAccount)}#all/{Uri.EscapeDataString(s.GmailId)}"
@@ -1483,9 +1611,11 @@ public partial class OmabiloApp
 
             c.Row(["gap-2 flex-wrap"], content: r =>
             {
-                var connected = snap.Connection is { Status: not ConnectionStatus.NeedsReconnect };
+                var forwarded = !SyncEngine.CanReread(item);
+                var connected = snap.Connection is { Status: not ConnectionStatus.NeedsReconnect } && !forwarded;
                 r.Button([Button.GhostSm], text: "Read the email again", icon: "rotate-ccw", disabled: !connected || _myBusy.Value,
-                    tooltip: connected ? "Re-reads the source email with the current rules, keeping your corrections" : "Connect Gmail to re-read the email",
+                    tooltip: forwarded ? "Forwarded emails aren't kept, so forward it again to re-read it"
+                        : connected ? "Re-reads the source email with the current rules, keeping your corrections" : "Connect Gmail to re-read the email",
                     onClick: async () => await RunMyAsync(async uid => await Engine.ReprocessAsync(uid, item.Id, CancellationToken.None) != null ? "Read again." : "Couldn't read it again."));
 
                 if (snap.Settings.AiEnabled && item.Ai == null)
@@ -1522,11 +1652,16 @@ public partial class OmabiloApp
 
         view.Column(["gap-3"], content: col =>
         {
+            SectionHeader(col, "Forward bills", "Your private address: works with any email, without giving Omabilo access to your mailbox.");
+            ForwardBillsCard(col, snap, compact: true);
+            col.Button([Button.OutlineSm, "self-start"], text: "Get a new address", icon: "refresh-cw", disabled: _myBusy.Value || snap.Forward == null,
+                onClick: () => _myConfirm.Value = "new-forward");
+
             SectionHeader(col, "Gmail", "Omabilo reads email only with your permission, and only to find financial messages.");
 
             if (snap.Connection is not { } c)
             {
-                ConnectGmailCard(col);
+                ConnectGmailCard(col, primary: false);
             }
             else
             {
@@ -1646,6 +1781,16 @@ public partial class OmabiloApp
         });
 
         var confirm = _myConfirm.Value;
+
+        view.AlertDialog(open: confirm == "new-forward", onOpenChange: async open => { if (!open) _myConfirm.Value = null; },
+            title: "Get a new forwarding address?",
+            description: "Email sent to your current address will no longer reach Omabilo. Update any forwarding rules in your email to the new address. Bills already found stay.",
+            cancelLabel: "Cancel", actionLabel: "Get a new address", actionStyle: [Button.PrimaryMd],
+            onAction: async () =>
+            {
+                _myConfirm.Value = null;
+                await RunMyAsync(async uid => { await Engine.NewForwardAddressAsync(uid, CancellationToken.None); return "You have a new forwarding address. The old one no longer works."; });
+            });
 
         view.AlertDialog(open: confirm == "disconnect", onOpenChange: async open => { if (!open) _myConfirm.Value = null; },
             title: "Disconnect Gmail?",

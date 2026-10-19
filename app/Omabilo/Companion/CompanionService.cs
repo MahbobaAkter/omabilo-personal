@@ -24,7 +24,8 @@ public sealed record CompanionSnapshot(
     CashFlowPlan Plan,
     IReadOnlyList<Suggestion> Suggestions,
     IReadOnlyList<RecurringPattern> Recurring,
-    GmailWatch? Watch = null)
+    GmailWatch? Watch = null,
+    ForwardAddress? Forward = null)
 {
     /// <summary>True while Gmail push notices are set up for this mailbox, so new mail arrives without polling.</summary>
     public bool PushActive(DateTime now) => Watch is { LastError: null, ExpiresUtc: { } e } && e > now;
@@ -116,7 +117,8 @@ public sealed class CompanionService(ICompanionStore store, SyncEngine engine, F
         var plan = CashFlowPlanner.Plan(items, settings, income, today);
         var suggestions = CashFlowPlanner.Suggest(items, plan, income, settings, today);
         var watch = connection == null ? null : await store.GetWatchAsync(userId, ct);
-        return new CompanionSnapshot(connection, settings, items, income, plan, suggestions, ItemRules.Recurring(items, today), watch);
+        var forward = await engine.ForwardAddressAsync(userId, ct);
+        return new CompanionSnapshot(connection, settings, items, income, plan, suggestions, ItemRules.Recurring(items, today), watch, forward);
     }
 
     public async Task<(FinancialItem? Item, IReadOnlyList<string> Errors)> EditAsync(string userId, string itemId, ItemEdit edit, CancellationToken ct)
@@ -197,7 +199,8 @@ public sealed class CompanionService(ICompanionStore store, SyncEngine engine, F
             exportedUtc = clock(),
             gmail = c == null ? null : new { c.GoogleEmail, Status = c.Status.ToString(), c.ConnectedUtc, c.LastSuccessUtc, c.GrantedScopes },
             settings = await store.GetSettingsAsync(userId, ct),
-            items = await store.GetItemsAsync(userId, ct),
+            forwarding = await store.GetForwardAsync(userId, ct) is { } f ? new { f.Token, f.CreatedUtc, f.LastReceivedUtc, f.ReceivedCount } : null,
+            items =await store.GetItemsAsync(userId, ct),
             activity = await store.GetAuditAsync(userId, 500, ct),
         };
         return JsonSerializer.SerializeToUtf8Bytes(export, new JsonSerializerOptions(CompanionJson.Options) { WriteIndented = true });
