@@ -656,7 +656,7 @@ public sealed class SyncEngine(
     }
 
     /// <summary>Classifies a decoded email and files what it holds: the part Gmail and forwarded mail share.</summary>
-    private async Task<(Outcome Outcome, int Created)> FileMailAsync(string userId, string id, DateTime receivedUtc, MailMessage mail, string? ownerEmail,
+    private async Task<(Outcome Outcome, int Created, string? FirstId)> FileMailAsync(string userId, string id, DateTime receivedUtc, MailMessage mail, string? ownerEmail,
         CompanionSettings settings, AiBudget budget, CancellationToken ct)
     {
         var cls = MessageClassifier.Classify(mail.From, mail.Subject, RecordExtractor.FullText(mail));
@@ -668,7 +668,7 @@ public sealed class SyncEngine(
         else if (!cls.IsFinancial)
         {
             await store.SaveMessageAsync(new ProcessedMessage(userId, id, receivedUtc, false, FinKind.NotFinancial, null, null, clock()), ct);
-            return (Outcome.NotFinancial, 0);
+            return (Outcome.NotFinancial, 0, null);
         }
 
         var result = Outcome.Updated;
@@ -679,8 +679,8 @@ public sealed class SyncEngine(
         {
             var item = await ExplainAsync(extracted, mail, settings, budget, ct);
 
-            // A forwarded email can't be fetched again, so nothing is planned for a later try
-            item = BillForwarding.IsForwardedId(id) ? item with { AttachmentRetries = 0, AttachmentRetryAfterUtc = null } : WithRetryPlan(item, null);
+            // A forwarded email or uploaded file can't be fetched again, so nothing is planned for a later try
+            item = BillUpload.NotInGmail(id) ? item with { AttachmentRetries = 0, AttachmentRetryAfterUtc = null } : WithRetryPlan(item, null);
 
             var (saved, outcome) = await FileItemAsync(userId, item, ct);
             firstId ??= saved.Id;
@@ -696,7 +696,7 @@ public sealed class SyncEngine(
         }
 
         await store.SaveMessageAsync(new ProcessedMessage(userId, id, receivedUtc, true, cls.Kind, firstId, null, clock()), ct);
-        return (result, created);
+        return (result, created, firstId);
     }
 
     // ── Forwarded bills ─────────────────────────────────────────────────────
@@ -759,7 +759,7 @@ public sealed class SyncEngine(
         try
         {
             var mail = await ToMailAsync("", full, settings, ct);
-            var (outcome, created) = await FileMailAsync(userId, id, email.ReceivedUtc, mail, owner, settings,
+            var (outcome, created, _) = await FileMailAsync(userId, id, email.ReceivedUtc, mail, owner, settings,
                 new AiBudget(settings.AiEnabled && ai != null ? 5 : 0), ct);
 
             await store.SaveForwardAsync(address with { LastReceivedUtc = now, ReceivedCount = address.ReceivedCount + 1 }, ct);
@@ -771,6 +771,79 @@ public sealed class SyncEngine(
             log($"forwarded message {email.Id} for user {userId} failed with {ex.GetType().Name}");
             await store.SaveMessageAsync(new ProcessedMessage(userId, id, email.ReceivedUtc, false, FinKind.NotFinancial, null, ex.GetType().Name, clock()), ct);
             return new(ForwardOutcome.Failed, userId);
+        }
+    }
+
+    // ── Uploaded documents ──────────────────────────────────────────────────
+
+    /// <summary>Files a PDF the signed-in person uploaded, for that person only. The caller passes the
+    /// user id from the server's session; the file itself is not kept, only what was read from it.</summary>
+    public async Task<UploadResult> ImportUploadAsync(string userId, string fileName, byte[] data, CancellationToken ct)
+    {
+        if (BillUpload.Reject(fileName, data) is { } rejected)
+        {
+            return new(rejected);
+        }
+
+        var name = BillUpload.CleanFileName(fileName);
+        var id = BillUpload.IdFor(data);
+        var now = clock();
+
+        if (!await store.TryClaimMessageAsync(new ProcessedMessage(userId, id, now, false, FinKind.NotFinancial, null, "processing", now), ct))
+        {
+            var seen = await store.GetMessageAsync(userId, id, ct);
+
+            // Another upload of this file is still being read; one stuck after a restart is read again
+            if (seen is { Error: "processing" } && now - seen.ProcessedUtc < TimeSpan.FromMinutes(10))
+            {
+                return new(UploadOutcome.AlreadyFiled);
+            }
+
+            if (seen is { ItemId: { } existing } && await store.GetItemAsync(userId, existing, ct) != null)
+            {
+                return new(UploadOutcome.AlreadyFiled, existing);
+            }
+
+            if (seen is { IsFinancial: false, Error: null })
+            {
+                return new(UploadOutcome.NotFinancial);
+            }
+
+            // It failed before, or the person deleted what it became: read it again
+            await store.SaveMessageAsync(new ProcessedMessage(userId, id, now, false, FinKind.NotFinancial, null, "processing", now), ct);
+        }
+
+        var settings = await store.GetSettingsAsync(userId, ct);
+        var full = new GmailFullMessage(
+            new GmailMessageMeta(id, id, "", Path.GetFileNameWithoutExtension(name), now, "", null, true),
+            "",
+            [new GmailAttachmentRef(name, "application/pdf", data.LongLength, "file-0", data)]);
+
+        try
+        {
+            var mail = await ToMailAsync("", full, settings, ct);
+
+            // A PDF with no readable text (a scan, a locked or damaged file) isn't saved as a guessed
+            // record: the file isn't kept, so it could never be read later. The error lets it be uploaded again.
+            if (mail.Attachments.FirstOrDefault() is { } doc && string.IsNullOrWhiteSpace(doc.Text))
+            {
+                await store.SaveMessageAsync(new ProcessedMessage(userId, id, now, false, FinKind.NotFinancial, null, $"unread:{doc.Status}", clock()), ct);
+                log($"upload {id} for user {userId}: not read ({doc.Status})");
+                return new(UploadOutcome.Unreadable, Unread: doc.Status);
+            }
+
+            var (outcome, created, itemId) = await FileMailAsync(userId, id, now, mail, null, settings,
+                new AiBudget(settings.AiEnabled && ai != null ? 1 : 0), ct);
+
+            await store.AddAuditAsync(userId, "document_uploaded", itemId, ct);
+            log($"upload {id} for user {userId}: {outcome}, {created} new item(s)");
+            return outcome == Outcome.NotFinancial ? new(UploadOutcome.NotFinancial) : new(UploadOutcome.Filed, itemId, created);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log($"upload {id} for user {userId} failed with {ex.GetType().Name}");
+            await store.SaveMessageAsync(new ProcessedMessage(userId, id, now, false, FinKind.NotFinancial, null, ex.GetType().Name, clock()), ct);
+            return new(UploadOutcome.Failed);
         }
     }
 
@@ -1103,8 +1176,8 @@ public sealed class SyncEngine(
         return done;
     }
 
-    /// <summary>True when the item came from Gmail; a forwarded email isn't kept, so it can't be read again.</summary>
-    public static bool CanReread(FinancialItem item) => item.Sources.Any(s => !BillForwarding.IsForwardedId(s.GmailId));
+    /// <summary>True when the item came from Gmail; a forwarded email or uploaded file isn't kept, so it can't be read again.</summary>
+    public static bool CanReread(FinancialItem item) => item.Sources.Any(s => !BillUpload.NotInGmail(s.GmailId));
 
     /// <summary>Reads an item's messages again with the current rules, keeping the person's edits and decisions.</summary>
     public async Task<FinancialItem?> ReprocessAsync(string userId, string itemId, CancellationToken ct)
@@ -1123,7 +1196,7 @@ public sealed class SyncEngine(
 
     private async Task<FinancialItem> RereadAsync(string userId, string token, FinancialItem old, string? ownerEmail, CompanionSettings settings, AiBudget budget, CancellationToken ct)
     {
-        var gmailSources = old.Sources.Where(s => !BillForwarding.IsForwardedId(s.GmailId)).ToList();
+        var gmailSources = old.Sources.Where(s => !BillUpload.NotInGmail(s.GmailId)).ToList();
         var original = gmailSources.FirstOrDefault(s => s.Role == "original") ?? gmailSources.FirstOrDefault();
 
         if (original == null)

@@ -14,7 +14,8 @@ public sealed record ItemEdit(
     string? Reference = null,
     string? Purpose = null,
     decimal? Net = null,
-    string? Note = null);
+    string? Note = null,
+    FinKind? Kind = null);
 
 public sealed record CompanionSnapshot(
     GmailConnection? Connection,
@@ -50,12 +51,25 @@ public static class CompanionEdits
                 nameof(FinancialItem.Reference) => r with { Reference = old.Reference },
                 nameof(FinancialItem.Purpose) => r with { Purpose = old.Purpose },
                 nameof(FinancialItem.Net) => r with { Net = old.Net, Amount = old.IsIncome ? old.Net : r.Amount },
+                // A re-read on the other side of income (a bill read again after it was called a payslip)
+                // brings back an amount that doesn't fit the corrected type, so the corrected one is kept
+                nameof(FinancialItem.Kind) => r with
+                {
+                    Kind = old.Kind, IncomeEvidence = old.IncomeEvidence, Category = old.Category,
+                    Amount = r.IsIncome != old.IsIncome ? old.Amount : r.Amount,
+                    Net = r.IsIncome != old.IsIncome ? old.Net : r.Net,
+                    Missing = r.IsIncome != old.IsIncome ? old.Missing : r.Missing,
+                },
                 _ => r,
             };
         }
 
         return r;
     }
+
+    /// <summary>A "missing" note about the item's money: its total, amount or salary.</summary>
+    private static bool IsAmountGap(string m) =>
+        m.Contains("amount", StringComparison.OrdinalIgnoreCase) || m.Contains("total", StringComparison.OrdinalIgnoreCase) || m.Contains("salary", StringComparison.OrdinalIgnoreCase);
 
     public static IReadOnlyList<string> Validate(ItemEdit e, DateTime today)
     {
@@ -68,6 +82,7 @@ public static class CompanionEdits
         if (e.Counterparty is { Length: > 120 }) errors.Add("The company name is too long.");
         if (e.Purpose is { Length: > 200 }) errors.Add("The description is too long.");
         if (e.Note is { Length: > 1000 }) errors.Add("The note is too long.");
+        if (e.Kind is { } k && (k == FinKind.NotFinancial || !Enum.IsDefined(k))) errors.Add("Choose one of the listed document types. To remove something that isn't financial, use Not applicable or Delete.");
         return errors;
     }
 
@@ -76,13 +91,40 @@ public static class CompanionEdits
         var edited = item.EditedFields.ToHashSet();
         var r = item;
 
+        // A new document type moves the item to that module (a payslip to Salary, a tax notice to
+        // Taxes). Nothing is copied into a field the document didn't state: crossing between income
+        // and the rest changes what the amount means (a bill's total isn't a net salary), so it is
+        // cleared and listed as missing rather than carried over.
+        if (e.Kind is { } k && k != item.Kind)
+        {
+            r = r with { Kind = k };
+            var crossed = r.IsIncome != item.IsIncome;
+            var gaps = r.Missing.Where(m => !crossed || !IsAmountGap(m)).ToList();
+
+            if (crossed)
+            {
+                r = r with { Amount = null, Net = null };
+            }
+
+            if (r.IsIncome && r.Net == null && !gaps.Any(m => m.Contains("net salary", StringComparison.OrdinalIgnoreCase))) gaps.Add("Net salary");
+            if (!r.IsIncome && r.Amount == null && !gaps.Any(IsAmountGap)) gaps.Add("The total amount");
+
+            r = r with
+            {
+                IncomeEvidence = !r.IsIncome ? IncomeEvidence.None : item.IsIncome ? item.IncomeEvidence : k == FinKind.Payslip ? IncomeEvidence.Payslip : IncomeEvidence.Scheduled,
+                Category = edited.Contains(nameof(FinancialItem.Category)) ? r.Category : RecordExtractor.Categorize(k, $"{r.Title} {r.Purpose}", r.Counterparty),
+                Missing = gaps,
+            };
+            edited.Add(nameof(FinancialItem.Kind));
+        }
+
         if (e.Counterparty is { } cp && cp.Trim().Length > 0) { r = r with { Counterparty = cp.Trim() }; edited.Add(nameof(FinancialItem.Counterparty)); }
         if (e.Amount is { } a) { r = r with { Amount = a }; edited.Add(nameof(FinancialItem.Amount)); }
         if (e.DueDate is { } d) { r = r with { DueDate = d.Date }; edited.Add(nameof(FinancialItem.DueDate)); }
         if (e.EventDate is { } ev) { r = r with { EventDate = ev.Date }; edited.Add(nameof(FinancialItem.EventDate)); }
         if (e.Category is { } c) { r = r with { Category = c }; edited.Add(nameof(FinancialItem.Category)); }
         if (e.Purpose is { } p) { r = r with { Purpose = p.Trim() }; edited.Add(nameof(FinancialItem.Purpose)); }
-        if (e.Net is { } n) { r = r with { Net = n, Amount = item.IsIncome ? n : r.Amount }; edited.Add(nameof(FinancialItem.Net)); }
+        if (e.Net is { } n) { r = r with { Net = n, Amount = r.IsIncome ? n : r.Amount }; edited.Add(nameof(FinancialItem.Net)); }
         if (e.Note != null) r = r with { UserNote = e.Note.Trim().Length == 0 ? null : e.Note.Trim() };
 
         if (e.Reference is { } rf)

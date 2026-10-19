@@ -90,6 +90,9 @@ public static class ItemRules
         if (i.Flags.Count > 0) return (true, "Has conflicting or unusual details");
         if (i.Confidence < ReviewConfidence) return (true, "Omabilo isn't sure it read this correctly");
         if (i.IsObligation is false && i.Kind is FinKind.Invoice or FinKind.PaymentReminder) return (true, "Details are missing");
+
+        // An uploaded document stays unconfirmed until the person says what Omabilo read is right
+        if (i.Sources.Count > 0 && BillUpload.IsUploadId(i.Sources[0].GmailId)) return (true, "You uploaded this and haven't checked what Omabilo read yet");
         return (false, null);
     }
 

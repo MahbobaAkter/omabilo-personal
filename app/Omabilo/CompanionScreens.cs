@@ -25,6 +25,7 @@ public partial class OmabiloApp
     private readonly ClientReactive<string> _eDue = new("");
     private readonly ClientReactive<string> _eDate = new("");
     private readonly ClientReactive<string> _eCategory = new(Categories.Other);
+    private readonly ClientReactive<string> _eKind = new(nameof(FinKind.Invoice));
     private readonly ClientReactive<string> _eReference = new("");
     private readonly ClientReactive<string> _ePurpose = new("");
     private readonly ClientReactive<string> _eNet = new("");
@@ -294,6 +295,7 @@ public partial class OmabiloApp
         _eDue.Value = item.DueDate?.ToString("d.M.yyyy", CultureInfo.InvariantCulture) ?? "";
         _eDate.Value = item.EventDate?.ToString("d.M.yyyy", CultureInfo.InvariantCulture) ?? "";
         _eCategory.Value = item.Category;
+        _eKind.Value = item.Kind.ToString();
         _eReference.Value = item.Reference ?? "";
         _ePurpose.Value = item.Purpose ?? "";
         _eNet.Value = item.Net?.ToString("0.00", CultureInfo.InvariantCulture) ?? "";
@@ -328,7 +330,8 @@ public partial class OmabiloApp
             Reference: _eReference.Value.Trim() != (item.Reference ?? "") ? _eReference.Value : null,
             Purpose: _ePurpose.Value.Trim() != (item.Purpose ?? "") ? _ePurpose.Value : null,
             Net: item.IsIncome && Num(_eNet.Value, "Net salary") is { } n && n != item.Net ? n : null,
-            Note: _eNote.Value.Trim() != (item.UserNote ?? "") ? _eNote.Value : null);
+            Note: _eNote.Value.Trim() != (item.UserNote ?? "") ? _eNote.Value : null,
+            Kind: Enum.TryParse<FinKind>(_eKind.Value, out var kind) && kind != item.Kind ? kind : null);
 
         if (errors.Count > 0)
         {
@@ -352,7 +355,15 @@ public partial class OmabiloApp
         _eErrors.Value = Array.Empty<string>();
         _myEditing.Value = false;
         await LoadMyAsync();
-        _toasts.Success("Correction saved. Omabilo keeps it even when the message is read again.");
+        var cleared = updated!.IsIncome != item.IsIncome && updated.Amount == null
+            ? $" Its amount was cleared because it meant something else before. Add the {(updated.IsIncome ? "net salary" : "amount")} with Correct details."
+            : " Check its other details with Correct details.";
+        var where = updated.Kind != item.Kind
+            ? $" It's now a {KindName(updated.Kind).ToLowerInvariant()}, in {(updated.IsIncome ? "your salary records" : updated.Category)}.{cleared}"
+            : "";
+        _toasts.Success(updated.UserState == UserState.None
+            ? $"Correction saved.{where} Press Looks right once everything is correct."
+            : $"Correction saved.{where} Omabilo keeps it even when the message is read again.");
     }
 
     private async Task SaveSettingsAsync()
@@ -475,6 +486,18 @@ public partial class OmabiloApp
         FinKind.OtherFinancial => "Financial message",
         _ => k.ToString(),
     };
+
+    private static readonly FinKind[] CorrectableKinds = Enum.GetValues<FinKind>().Where(k => k != FinKind.NotFinancial).ToArray();
+
+    /// <summary>A document type with the part of Omabilo it goes to, for the correction form.</summary>
+    private static string KindChoice(FinKind k) => KindName(k) + (k switch
+    {
+        FinKind.Salary or FinKind.Payslip => " (salary)",
+        FinKind.Receipt or FinKind.Refund => " (spending)",
+        FinKind.TaxNotice => " (bills, Taxes)",
+        FinKind.PaymentConfirmation or FinKind.OtherFinancial => " (information only)",
+        _ => " (bills)",
+    });
 
     private static void BasisBadge(UIView view, AmountBasis basis)
     {
@@ -601,7 +624,7 @@ public partial class OmabiloApp
             if (address == null)
             {
                 v.Alert("Receiving email isn't turned on yet", tone: SemanticTone.Warning,
-                    description: "The app owner still needs to turn on receiving email for Omabilo. Until then, use Upload a PDF in the Financial Inbox.");
+                    description: "The app owner still needs to turn on receiving email for Omabilo. Until then, use Upload a bill in My inbox to save PDF bills to your account.");
                 return;
             }
 
@@ -751,6 +774,7 @@ public partial class OmabiloApp
         if (snap.Connection == null)
         {
             ForwardBillsCard(view, snap, compact: snap.Items.Count > 0);
+            UploadBillCard(view, compact: snap.Items.Count > 0);
 
             if (snap.Items.Count == 0)
             {
@@ -1075,6 +1099,7 @@ public partial class OmabiloApp
 
         if (snap.Connection == null && snap.Items.Count == 0)
         {
+            UploadBillCard(view, compact: false);
             ForwardBillsCard(view, snap, compact: false);
             ConnectGmailCard(view, primary: false);
             return;
@@ -1088,6 +1113,8 @@ public partial class OmabiloApp
         {
             ForwardBillsCard(view, snap, compact: true);
         }
+
+        UploadBillCard(view, compact: true);
 
         var today = DateTime.UtcNow.Date;
         var statuses = snap.Items.ToDictionary(i => i.Id, i => ItemRules.StatusOf(i, today));
@@ -1391,6 +1418,7 @@ public partial class OmabiloApp
         view.Column(["gap-3"], content: f =>
         {
             f.Text([Text.BodySm, "text-muted-foreground"], "Correct anything Omabilo read wrong. Your corrections are kept when the message is read again.");
+            f.Select(["w-full"], label: "Document type", bind: _eKind, options: CorrectableKinds.Select(k => new SelectOption(k.ToString(), KindChoice(k))).ToArray());
             f.TextField(label: i.IsIncome ? "Employer" : i.IsExpense ? "Merchant" : "Company", bind: _eCounterparty);
 
             if (i.IsIncome)
@@ -1535,6 +1563,12 @@ public partial class OmabiloApp
                     if (a.Problem != null) b.Text([Text.BodySm, a.WasRead ? "text-muted-foreground" : "text-foreground"], a.Problem);
                     if (item.AttachmentRetryAfterUtc is { } retry && a.CanRetry) b.Text([Text.Caption, "text-muted-foreground"], $"Next automatic try after {retry:HH:mm} UTC.");
 
+                    if (BillUpload.IsUploadId(a.GmailId))
+                    {
+                        b.Text([Text.Caption, "text-muted-foreground"], "A file you uploaded. The file itself isn't kept.");
+                        return;
+                    }
+
                     if (BillForwarding.IsForwardedId(a.GmailId))
                     {
                         b.Text([Text.Caption, "text-muted-foreground"], "From an email you forwarded to Omabilo. The email itself isn't kept.");
@@ -1565,8 +1599,13 @@ public partial class OmabiloApp
                         r.Text([Text.BodySm, "text-foreground font-semibold truncate"], s.Subject.Length > 0 ? s.Subject : "(no subject)");
                         r.Badge(s.Role, tone: SemanticTone.Neutral, size: BadgeSize.Sm);
                     });
-                    b.Text([Text.Caption, "text-muted-foreground"], $"{s.From} · {Day(s.ReceivedUtc)}");
+                    b.Text([Text.Caption, "text-muted-foreground"], BillUpload.IsUploadId(s.GmailId) ? $"Uploaded by you · {Day(s.ReceivedUtc)}" : $"{s.From} · {Day(s.ReceivedUtc)}");
                     b.Text(["text-xs font-mono whitespace-pre-wrap break-words text-foreground/80"], s.Excerpt);
+
+                    if (BillUpload.IsUploadId(s.GmailId))
+                    {
+                        return;
+                    }
 
                     if (BillForwarding.IsForwardedId(s.GmailId))
                     {
@@ -1614,7 +1653,7 @@ public partial class OmabiloApp
                 var forwarded = !SyncEngine.CanReread(item);
                 var connected = snap.Connection is { Status: not ConnectionStatus.NeedsReconnect } && !forwarded;
                 r.Button([Button.GhostSm], text: "Read the email again", icon: "rotate-ccw", disabled: !connected || _myBusy.Value,
-                    tooltip: forwarded ? "Forwarded emails aren't kept, so forward it again to re-read it"
+                    tooltip: forwarded ? "Omabilo doesn't keep forwarded emails or uploaded files, so it can't read this one again"
                         : connected ? "Re-reads the source email with the current rules, keeping your corrections" : "Connect Gmail to re-read the email",
                     onClick: async () => await RunMyAsync(async uid => await Engine.ReprocessAsync(uid, item.Id, CancellationToken.None) != null ? "Read again." : "Couldn't read it again."));
 
