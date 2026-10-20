@@ -29,7 +29,8 @@ public partial class OmabiloApp
         var balance = CurrentBalance();
         var bills = BillsBeforePayday();
         var billTotal = bills.Sum(b => b.Amount ?? 0);
-        var safe = balance - billTotal;
+        var plan = ComputePaydayPlan();
+        var safe = plan.SafeToSpend;
         var planned = _buckets.Sum(b => b.Planned);
         var left = p.NetPay - planned;
 
@@ -62,9 +63,38 @@ public partial class OmabiloApp
                 view.Text([Text.Display, "tabular-nums tracking-tight", safe >= 0 ? "text-foreground" : "text-error-600"], Fin.Eur(safe));
                 view.Text([Text.BodySm, "text-muted-foreground"], safe > 0 ? $"≈ {Fin.Eur(safe / days)} per day for {days} days" : "Move money or snooze a bill to stay above zero.");
                 view.Separator(["default", "my-1"]);
-                CalcLine(view, "Current account", Fin.Eur(balance, 2));
-                CalcLine(view, $"Bills due before payday ({bills.Count})", Fin.Eur(-billTotal, 2));
+                view.Text([Text.Overline, "text-muted-foreground"], "How it's worked out");
+                CalcLine(view, "Current account today", Fin.Eur(plan.Balance, 2), sureness: Sureness.Confirmed);
+
+                foreach (var l in plan.Bills.Concat(plan.DebtPayments).Concat(plan.Savings))
+                {
+                    CalcLine(view, $"{l.Label} · {Fin.Day(l.Date!.Value)}", Fin.Eur(-l.Amount, 2), sureness: l.Sureness);
+                }
+
                 CalcLine(view, "Safe to spend", Fin.Eur(safe, 2), strong: true);
+
+                if (plan.NotCounted.Count > 0)
+                {
+                    view.Column(["gap-1 rounded-xl bg-muted/60 p-3"], content: c =>
+                    {
+                        c.Text([Text.Caption, "font-semibold text-foreground"], "Not counted, so nothing is counted twice");
+                        foreach (var (label, reason) in plan.NotCounted)
+                        {
+                            c.Text([Text.Caption, "text-muted-foreground"], $"{label}: {reason}");
+                        }
+                    });
+                }
+
+                view.Column(["gap-1 rounded-xl border border-dashed border-secondary p-3"], content: c =>
+                {
+                    c.Row(["items-center gap-2"], content: r =>
+                    {
+                        r.Text([Text.Caption, "font-semibold text-foreground"], "At your usual pace");
+                        SurenessBadge(r, Sureness.Estimate);
+                    });
+                    c.Text([Text.Caption, "text-muted-foreground"],
+                        $"Last month you spent about {Fin.Eur(plan.EverydayPerDay)} a day on groceries, eating out and shopping. {days} days like that is {Fin.Eur(plan.EverydayEstimate)}, leaving about {Fin.Eur(plan.LeftAfterEveryday)} at payday.");
+                });
             });
 
             // ── Bills before payday ──────────────────────────────────────
@@ -96,6 +126,8 @@ public partial class OmabiloApp
                 }
             });
         });
+
+        RenderSpendGuard(view, plan);
 
         // ── Plan the next pay ───────────────────────────────────────────────
         view.Box([Card.Elevated, "p-5 sm:p-6 flex flex-col gap-5"], content: view =>
@@ -192,12 +224,81 @@ public partial class OmabiloApp
         });
     }
 
-    private static void CalcLine(UIView view, string label, string value, bool strong = false)
+    private static void CalcLine(UIView view, string label, string value, bool strong = false, Sureness? sureness = null)
     {
         view.Row(["items-center justify-between gap-2"], content: r =>
         {
             r.Text([strong ? Text.BodyStrong : Text.BodySm, "flex-1 min-w-0", strong ? "text-foreground" : "text-muted-foreground"], label);
+
+            if (sureness is { } s)
+            {
+                SurenessBadge(r, s);
+            }
+
             r.Text([strong ? Text.BodyStrong : Text.BodySm, "tabular-nums whitespace-nowrap shrink-0 text-foreground"], value);
+        });
+    }
+
+    /// <summary>Confirmed = recorded or received; Scheduled = a fixed amount still to happen; Estimate = a typical figure.</summary>
+    private static void SurenessBadge(UIView view, Sureness s) => view.Badge(s switch
+    {
+        Sureness.Confirmed => "Confirmed",
+        Sureness.Scheduled => "Scheduled",
+        _ => "Estimate",
+    }, tone: s switch
+    {
+        Sureness.Confirmed => SemanticTone.Success,
+        Sureness.Scheduled => SemanticTone.Info,
+        _ => SemanticTone.Warning,
+    }, size: BadgeSize.Sm);
+
+    private readonly ClientReactive<string> _spendAmount = new("");
+
+    private void RenderSpendGuard(UIView view, PaydayPlan plan)
+    {
+        view.Box([Card.Default, "p-5 sm:p-6 flex flex-col gap-4"], content: view =>
+        {
+            SectionHeader(view, "Smart Spend Guard", "Thinking of buying something? See what it does to the rest of your month before you decide.");
+
+            view.Row(["items-end gap-2 flex-wrap"], content: r =>
+            {
+                r.TextField(["default", "w-44"], label: "Price (€)", bind: _spendAmount, type: "number", min: "0", step: "1", placeholder: "e.g. 120");
+
+                foreach (var quick in new[] { 25m, 60m, 150m })
+                {
+                    r.Button([Button.OutlineSm, "h-10"], text: Fin.Eur(quick), ariaLabel: $"Try {Fin.Eur(quick)}",
+                        onClick: () => _spendAmount.Value = quick.ToString(Fin.Inv));
+                }
+            });
+
+            if (!Fin.TryParseAmount(_spendAmount.Value, out var amount) || amount <= 0)
+            {
+                view.Text([Text.BodySm, "text-muted-foreground"], "Enter a price to see how it fits. Nothing is spent or saved here; it's only a check.");
+                return;
+            }
+
+            var check = CheckPurchase(plan, amount);
+            view.Alert(check.Verdict, tone: check.Tone switch { "error" => SemanticTone.Error, "warning" => SemanticTone.Warning, _ => SemanticTone.Success });
+
+            view.Column(["gap-1.5"], content: c =>
+            {
+                CalcLine(c, "Safe to spend until payday now", Fin.Eur(plan.SafeToSpend, 2));
+                CalcLine(c, "This purchase", Fin.Eur(-amount, 2));
+                CalcLine(c, "Safe to spend afterwards", Fin.Eur(check.SafeAfter, 2), strong: true);
+                CalcLine(c, "Per day until payday", $"{Fin.Eur(check.PerDayBefore, 2)} → {Fin.Eur(check.PerDayAfter, 2)}");
+                CalcLine(c, "Left at payday at your usual pace", Fin.Eur(check.LeftAfterEveryday, 2), sureness: Sureness.Estimate);
+            });
+
+            if (check.AffectedGoal is { } g)
+            {
+                var after = g.Saved - Math.Min(check.FromSavings, g.Saved);
+                view.Text([Text.BodySm, "text-foreground"],
+                    $"Covering the {Fin.Eur(check.FromSavings)} gap from \"{g.Name}\" would take it from {Fin.Eur(g.Saved)} to {Fin.Eur(after)} " +
+                    $"({Fin.Pct((double)(after / g.Target) * 100)} of its {Fin.Eur(g.Target)} target).");
+            }
+
+            view.Text([Text.Caption, "text-muted-foreground"],
+                "Assumptions: bills and loan payments due before payday are paid on time; \"usual pace\" is last month's everyday spending; savings transfers happen after payday.");
         });
     }
 

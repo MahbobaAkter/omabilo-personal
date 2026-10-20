@@ -3,83 +3,81 @@ return await App.Run(args);
 public record SessionIdentity(string? UserId);
 public record ClientParameters(string Name = "Ikon");
 
-// Visual direction: a calm, trustworthy money companion. Deep teal brand on a soft sea-mist
-// background, white rounded-2xl cards with gentle depth, a clear numeric type scale and
-// comfortable density; a deep slate scheme for dark mode.
+// Visual direction: Nordic winter. A calm money companion on warm ivory, with pine green as the brand,
+// teal and glacier blue for the money-flow and info accents, muted amber for what's coming up, and a
+// small snowflake now and then. Clean Inter type with tabular numbers, rounded-2xl cards with soft
+// warm hairlines, spacious density, motion only where state changes. A deep pine night for dark mode.
+// No pink anywhere.
 [App]
 public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
 {
     private UI UI { get; } = new(app, new IkonTheme
     {
-        ["primary"] = "teal-700",
-        ["background"] = "#eef4f2",
-        ["foreground"] = "slate-900",
-        ["card"] = "white",
-        ["muted-foreground"] = "slate-500",
-        ["border"] = "slate-200",
+        ["primary"] = "#2f5d50",
+        ["background"] = "#f7f3ea",
+        ["foreground"] = "#1c2b28",
+        ["card"] = "#fffdf8",
+        ["muted"] = "#efe9dc",
+        ["muted-foreground"] = "#5c6a64",
+        ["border"] = "#e4dccb",
+        ["input"] = "#d6cdb9",
         ["radius"] = "rounded-2xl",
+        ["accent-300"] = "#cfe3ea",
 
         DarkMode = new IkonTheme
         {
-            ["primary"] = "teal-400",
-            ["background"] = "#0b1416",
-            ["foreground"] = "slate-100",
-            ["card"] = "#121e21",
-            ["muted-foreground"] = "slate-400",
-            ["border"] = "#22323a",
+            ["primary"] = "#86bfab",
+            ["background"] = "#0e1917",
+            ["foreground"] = "#e8eee9",
+            ["card"] = "#152320",
+            ["muted"] = "#1c2d29",
+            ["muted-foreground"] = "#98aaa3",
+            ["border"] = "#263a35",
+            ["input"] = "#334a44",
+            ["accent-800"] = "#2c4a55",
         },
     });
 
-    private record Section(string Key, string Label, string IconName);
-
-    private static readonly Section[] Sections =
-    [
-        new("dashboard", "Dashboard", "layout-dashboard"),
-        new("inbox", "Financial Inbox", "inbox"),
-        new("invoices", "Invoices", "file-text"),
-        new("debts", "Debt Tracker", "trending-down"),
-        new("payday", "Payday Planner", "calendar-clock"),
-        new("goals", "Savings & Goals", "piggy-bank"),
-        new("reports", "Monthly Reports", "chart-pie"),
-    ];
-
-    // ── Each person's money data, kept across restarts ──────────────────────
-    private static readonly List<Txn> SeedTxns = DemoData.Transactions();
-
-    private readonly PersistentSessionReactiveList<Txn> _txns = new(SeedTxns, key: "omabilo.txns.v1");
-    private readonly PersistentSessionReactiveList<InboxItem> _inbox = new(DemoData.Inbox(), key: "omabilo.inbox.v1");
-    private readonly PersistentSessionReactiveList<DebtAccount> _debts = new(DemoData.Debts(), key: "omabilo.debts.v1");
-    private readonly PersistentSessionReactiveList<SavingsGoal> _goals = new(DemoData.Goals(), key: "omabilo.goals.v1");
-    private readonly PersistentSessionReactiveList<PayBucket> _buckets = new(DemoData.Buckets(), key: "omabilo.buckets.v1");
-    private readonly PersistentSessionReactive<PaydaySettings> _payday = new(DemoData.Payday(SeedTxns), key: "omabilo.payday.v1");
-    private readonly PersistentSessionReactive<string> _strategy = new("avalanche", key: "omabilo.strategy.v1");
-    private readonly PersistentSessionReactive<double> _extraPayment = new(100, key: "omabilo.extra.v1");
+    // Every screen shows the signed-in person's own records; the menu itself is AppSections (plain C#, tested)
 
     // ── View state, per browser tab ─────────────────────────────────────────
-    private readonly ClientReactive<string> _section = new("dashboard");
+    private readonly ClientReactive<string> _section = new("my-overview");
+    private readonly ClientReactive<bool> _moreOpen = new(false);
     private readonly ClientReactive<UndoEntry?> _undo = new((UndoEntry?)null);
     private readonly Toasts _toasts = new();
     private long _undoSeq;
-
-    // One dialog open at a time, named by what it edits ("pay-debt:<id>", "add-goal", …)
-    private readonly ClientReactive<string?> _dialog = new((string?)null);
-    private readonly ClientReactive<string> _fName = new("");
-    private readonly ClientReactive<string> _fSecondary = new("");
-    private readonly ClientReactive<string> _fAmount = new("");
-    private readonly ClientReactive<string> _fAmount2 = new("");
-    private readonly ClientReactive<string> _fRate = new("");
-    private readonly ClientReactive<string> _fDay = new("1");
-    private readonly ClientReactive<string> _fKind = new("CreditCard");
-    private readonly ClientReactive<string> _fIcon = new("piggy-bank");
-    private readonly ClientReactive<string> _fDate = new("");
-    private readonly ClientReactive<string?> _fError = new((string?)null);
 
     private static DateTime Today => DateTime.UtcNow.Date;
 
     public async Task Main()
     {
+        app.OnClientJoined(OnCompanionClientJoinedAsync);
+        SubscribePaymentEvents();
+
+        // Back and forward in the browser move between screens
+        app.Navigation.PathChangedAsync += async e =>
+        {
+            var target = AppSections.ForPath(e.Path).Key;
+
+            if (target != _section.Value)
+            {
+                _section.Value = target;
+                _moreOpen.Value = false;
+                await LoadForSectionAsync(target);
+            }
+        };
+
         UI.Root([Page.Default, "h-screen overflow-hidden bg-background"], content: view =>
         {
+            // Before sign-in there is only the public landing page: nothing personal, nothing fictional
+            if (MyUserId == null)
+            {
+                RenderLanding(view);
+                RenderAccountDialog(view);
+                view.ToastHost(_toasts);
+                return;
+            }
+
             view.Row(["h-full w-full min-h-0"], content: view =>
             {
                 RenderSidebar(view);
@@ -93,15 +91,27 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                         view.Column(["mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 pt-2 pb-28 md:pb-12 gap-6",
                             "motion-[0:opacity-0_translate-y-[6px],100:opacity-100_translate-y-0] motion-duration-300ms"], content: view =>
                         {
+                            RenderRemovalBanner(view);
+
+                            // Before sign-in there is only the welcome: nothing personal, nothing fictional
+                            if (MyUserId == null)
+                            {
+                                view.Feature("welcome", content: SignedOutCard);
+                                return;
+                            }
+
                             switch (_section.Value)
                             {
-                                case "inbox": view.Feature("inbox", content: RenderInbox); break;
-                                case "invoices": view.Feature("invoices", content: RenderInvoices); break;
-                                case "debts": view.Feature("debts", content: RenderDebts); break;
-                                case "payday": view.Feature("payday", content: RenderPayday); break;
-                                case "goals": view.Feature("goals", content: RenderGoals); break;
-                                case "reports": view.Feature("reports", content: RenderReports); break;
-                                default: view.Feature("dashboard", content: RenderDashboard); break;
+                                case "my-inbox": view.Feature("my-inbox", content: RenderMyInbox); break;
+                                case "my-money": view.Feature("my-money", content: RenderMoneyScreen); break;
+                                case "my-debts": view.Feature("my-debts", content: RenderDebtsScreen); break;
+                                case "my-goals": view.Feature("my-goals", content: RenderGoalsScreen); break;
+                                case "my-payday": view.Feature("my-payday", content: RenderPaydayScreen); break;
+                                case "my-reports": view.Feature("my-reports", content: RenderReportsScreen); break;
+                                case "my-assistant": view.Feature("my-assistant", content: RenderAssistantScreen); break;
+                                case "my-settings": view.Feature("my-settings", content: RenderMySettings); break;
+                                case "my-profile": view.Feature("my-profile", content: RenderMyProfile); break;
+                                default: view.Feature("my-overview", content: RenderMyOverview); break;
                             }
                         });
                     });
@@ -109,7 +119,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
             });
 
             RenderMobileNav(view);
-            RenderDialogs(view);
+            RenderAccountDialog(view);
             RenderUndoToast(view);
             view.ToastHost(_toasts);
         });
@@ -117,9 +127,38 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
 
     // ── Shell ───────────────────────────────────────────────────────────────
 
-    private int AttentionCount() => _inbox.Count(i => EffectiveStatus(i) == InboxStatus.New);
+    private void Go(string section)
+    {
+        var target = AppSections.ByKey(section);
+        _section.Value = target.Key;
+        _moreOpen.Value = false;
 
-    private void Go(string section) => _section.Value = section;
+        // Each screen has its own address, so a refresh or a shared link opens the same screen
+        _ = SetPathQuietlyAsync(target.Path);
+
+        // A person's own records are read fresh each time they open one of their screens
+        _ = LoadForSectionAsync(target.Key);
+    }
+
+    private async Task SetPathQuietlyAsync(string path)
+    {
+        try
+        {
+            await app.Navigation.SetPathAsync(path);
+        }
+        catch (Exception ex)
+        {
+            Log.Instance.Info($"path update skipped: {ex.GetType().Name}");
+        }
+    }
+
+    private async Task LoadForSectionAsync(string section)
+    {
+        if (section.StartsWith("my-", StringComparison.Ordinal))
+        {
+            await LoadMyAsync();
+        }
+    }
 
     private void RenderSidebar(UIView view)
     {
@@ -136,50 +175,47 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                 });
             });
 
-            view.Column(["gap-1"], content: view =>
+            if (MyUserId != null)
             {
-                foreach (var s in Sections)
+                view.Column(["gap-1 min-h-0 overflow-y-auto"], content: view =>
                 {
-                    var active = _section.Value == s.Key;
-                    var count = s.Key switch { "inbox" => AttentionCount(), "invoices" => InvoicesToReview(), _ => 0 };
+                    var premium = IsPremium();
 
-                    view.Button([NavItem.Md, active ? NavItem.ActiveBrand : NavItem.Default, "h-11 rounded-xl"], key: s.Key,
-                        onClick: () => Go(s.Key),
-                        content: v =>
-                        {
-                            v.Icon([NavItem.Icon], name: s.IconName);
-                            v.Text([NavItem.Label, "flex-1 text-left"], text: s.Label);
+                    foreach (var s in AppSections.All)
+                    {
+                        var active = _section.Value == s.Key;
+                        var count = s.Key == "my-overview" ? MyReminderTasks() : 0;
 
-                            if (count > 0)
+                        view.Button([NavItem.Md, active ? NavItem.ActiveBrand : NavItem.Default, "h-11 rounded-xl"], key: s.Key,
+                            onClick: () => Go(s.Key),
+                            content: v =>
                             {
-                                v.Box(["min-w-6 h-6 px-1.5 rounded-full bg-brand-solid text-primary-on-brand text-xs font-semibold flex items-center justify-center"],
-                                    content: c => c.Text([], count.ToString()));
-                            }
-                        });
-                }
-            });
+                                v.Icon([NavItem.Icon], name: s.IconName);
+                                v.Text([NavItem.Label, "flex-1 text-left"], text: s.Label);
+
+                                if (s.Premium != null && !premium)
+                                {
+                                    v.Icon([Icon.Xs, "text-muted-foreground"], name: "lock", ariaLabel: "Premium");
+                                }
+                                else if (count > 0)
+                                {
+                                    v.Box(["min-w-6 h-6 px-1.5 rounded-full bg-brand-solid text-primary-on-brand text-xs font-semibold flex items-center justify-center"],
+                                        content: c => c.Text([], count.ToString()));
+                                }
+                            });
+                    }
+                });
+            }
 
             view.Box(["flex-1"]);
 
-            view.Box(["rounded-2xl bg-brand-solid/10 p-4"], content: view =>
-            {
-                view.Column(["gap-2"], content: view =>
-                {
-                    view.Row(["items-center gap-2"], content: r =>
-                    {
-                        r.Icon([Icon.Sm, "text-brand-secondary"], name: "shield-check");
-                        r.Text([Text.Label], "Demo mode");
-                    });
-                    view.Text([Text.Caption, "text-muted-foreground"], "All accounts, people and amounts here are fictional. Nothing connects to a bank.");
-                    view.Button([Button.GhostSm, "justify-start px-0 text-brand-secondary"], text: "Reset demo data", onClick: () => _dialog.Value = "reset");
-                });
-            });
+            RenderAccountPanel(view);
         });
     }
 
     private void RenderTopBar(UIView view)
     {
-        var section = Sections.First(s => s.Key == _section.Value);
+        var section = AppSections.ByKey(_section.Value);
 
         view.Row(["shrink-0 items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 py-4 mx-auto w-full max-w-6xl"], content: view =>
         {
@@ -190,31 +226,14 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                 view.Column(["min-w-0 gap-0"], content: view =>
                 {
                     view.Text([Text.Overline, "text-muted-foreground"], Fin.DayLong(Today));
-                    view.Heading(section.Label, style: [Text.H3, "truncate"], level: 1);
+                    view.Heading(MyUserId == null ? "Omabilo" : section.Label, style: [Text.H3, "truncate"], level: 1);
                 });
             });
 
             view.Row(["items-center gap-2 shrink-0"], content: view =>
             {
-                var attention = AttentionCount();
-
-                view.Button([Button.OutlineMd, "relative h-10"], text: "Inbox", ariaLabel: $"Inbox, {attention} need attention",
-                    onClick: () => Go("inbox"),
-                    content: v =>
-                    {
-                        v.Icon([Icon.Sm], name: "bell");
-                        v.Text(["hidden sm:inline"], attention > 0 ? $"{attention} to review" : "All clear");
-
-                        if (attention > 0)
-                        {
-                            v.Box(["sm:hidden absolute -top-1 -right-1 w-4 h-4 rounded-full bg-error-solid text-white text-[10px] font-bold flex items-center justify-center"],
-                                content: c => c.Text([], attention.ToString()));
-                        }
-                    });
-
-                view.Button([Button.GhostMd, Button.Icon, "md:hidden h-10 w-10"], ariaLabel: "Reset demo data",
-                    onClick: () => _dialog.Value = "reset",
-                    content: v => v.Icon([Icon.Sm], name: "rotate-ccw"));
+                PlanBadge(view);
+                RenderAccountButton(view);
             });
         });
     }
@@ -224,37 +243,62 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
         view.Row(["md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-secondary bg-card/95 backdrop-blur-sm px-1 pb-[env(safe-area-inset-bottom)]"],
             props: new Dictionary<string, object> { ["role"] = "navigation" }, ariaLabel: "Sections", content: view =>
         {
-            foreach (var s in Sections)
+            if (MyUserId == null)
             {
-                var active = _section.Value == s.Key;
-                var shortLabel = s.Label.Split(' ')[^1] switch
-                {
-                    "Inbox" => "Inbox",
-                    "Invoices" => "Invoices",
-                    "Tracker" => "Debts",
-                    "Planner" => "Payday",
-                    "Goals" => "Goals",
-                    "Reports" => "Reports",
-                    _ => "Home",
-                };
+                return;
+            }
 
+            void Tab(string key, string label, string icon, bool active, Action onClick, bool dot = false) =>
                 view.Button([$"flex-1 min-w-0 h-14 flex flex-col items-center justify-center gap-0.5 rounded-xl {(active ? "text-brand-secondary font-semibold" : "text-muted-foreground")}"],
-                    key: $"m-{s.Key}", ariaLabel: s.Label, onClick: () => Go(s.Key),
+                    key: $"m-{key}", ariaLabel: label, onClick: onClick,
                     content: v =>
                     {
                         v.Box(["relative"], content: b =>
                         {
-                            b.Icon([Icon.Sm], name: s.IconName);
+                            b.Icon([Icon.Sm], name: icon);
 
-                            if ((s.Key == "inbox" && AttentionCount() > 0) || (s.Key == "invoices" && InvoicesToReview() > 0))
+                            if (dot)
                             {
                                 b.Box(["absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-error-solid"]);
                             }
                         });
-                        v.Text(["text-[10px] leading-none truncate"], shortLabel);
+                        v.Text(["text-[10px] leading-none truncate"], label);
                     });
+
+            foreach (var key in AppSections.PhoneBar)
+            {
+                var s = AppSections.ByKey(key);
+                Tab(s.Key, s.ShortLabel, s.IconName, _section.Value == s.Key, () => Go(s.Key), s.Key == "my-overview" && MyReminderTasks() > 0);
             }
+
+            Tab("more", "More", "menu", !AppSections.PhoneBar.Contains(_section.Value), () => _moreOpen.Value = true);
         });
+
+        if (MyUserId == null)
+        {
+            return;
+        }
+
+        view.Sheet(open: _moreOpen.Value, onOpenChange: async open => _moreOpen.Value = open, side: Side.Bottom, title: "More", content: sheet =>
+            sheet.Column(["gap-1 pb-4"], content: list =>
+            {
+                var premium = IsPremium();
+
+                foreach (var s in AppSections.All.Where(s => !AppSections.PhoneBar.Contains(s.Key)))
+                {
+                    list.Button([NavItem.Md, _section.Value == s.Key ? NavItem.ActiveBrand : NavItem.Default, "h-12 rounded-xl"], key: $"more-{s.Key}", onClick: () => Go(s.Key),
+                        content: v =>
+                        {
+                            v.Icon([NavItem.Icon], name: s.IconName);
+                            v.Text([NavItem.Label, "flex-1 text-left"], text: s.Label);
+
+                            if (s.Premium != null && !premium)
+                            {
+                                v.Icon([Icon.Xs, "text-muted-foreground"], name: "lock", ariaLabel: "Premium");
+                            }
+                        });
+                }
+            }));
     }
 
     // ── Undo ────────────────────────────────────────────────────────────────
@@ -299,6 +343,10 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
         "error" => ["bg-error-500/15", "text-error-600 dark:text-error-400"],
         "info" => ["bg-info-500/15", "text-info-600 dark:text-info-400"],
         "neutral" => ["bg-muted", "text-muted-foreground"],
+        // Nordic accents for money flow and calm highlights
+        "teal" => ["bg-teal-500/15", "text-teal-700 dark:text-teal-300"],
+        "glacier" => ["bg-sky-300/30", "text-sky-800 dark:text-sky-200"],
+        "amber" => ["bg-amber-500/15", "text-amber-700 dark:text-amber-300"],
         _ => ["bg-brand-solid/10", "text-brand-secondary"],
     };
 
@@ -333,7 +381,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
     // A summary number that opens the screen holding its rows
     private static void StatTile(UIView view, string label, string value, string caption, string iconName, string tone, Action? onClick, string? key = null)
     {
-        view.Box([Card.Elevated, "p-4 sm:p-5 flex flex-col gap-2 sm:gap-3 text-left min-w-0",
+        view.Box([Card.Elevated, "p-4 sm:p-5 flex flex-col gap-1.5 sm:gap-2 text-left min-w-0",
                 onClick != null ? "cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all duration-150" : ""],
             key: key, ariaLabel: onClick != null ? $"{label}: {value}. Open" : null,
             onClick: onClick,
@@ -344,7 +392,7 @@ public partial class OmabiloApp(IApp<SessionIdentity, ClientParameters> app)
                     r.Text([Text.Label, "text-muted-foreground leading-snug"], label);
                     IconTile(r, iconName, tone, "w-8 h-8 sm:w-9 sm:h-9");
                 });
-                view.Text(["text-2xl sm:text-3xl font-bold leading-tight tabular-nums tracking-tight text-foreground truncate"], value);
+                view.Text(["text-xl sm:text-2xl font-semibold leading-tight tabular-nums tracking-tight text-foreground truncate"], value);
                 view.Text([Text.Caption, "text-muted-foreground"], caption);
             });
     }

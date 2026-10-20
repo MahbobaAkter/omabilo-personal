@@ -12,11 +12,45 @@ public partial class OmabiloApp
         var days = DaysToPayday();
         var greeting = DateTime.UtcNow.Hour switch { < 12 => "Good morning", < 18 => "Good afternoon", _ => "Good evening" };
 
-        view.Column(["gap-1"], content: view =>
+        var plan = ComputePaydayPlan();
+        var next = ComputeNextStep(plan);
+        var dueBeforePayday = plan.Bills.Sum(b => b.Amount) + plan.DebtPayments.Sum(b => b.Amount);
+
+        view.Grid(["grid grid-cols-1 lg:grid-cols-5 gap-4 lg:gap-6"], content: view =>
         {
-            view.Text([Text.H2, "tracking-tight text-foreground"], $"{greeting} 👋");
-            view.Text([Text.Body, "text-muted-foreground"],
-                $"Here's where your money stands today. Payday is in {days} day{(days == 1 ? "" : "s")}.");
+            // Your money in plain words, from the same figures as every card below
+            view.Box([Card.Elevated, "lg:col-span-3 p-5 sm:p-6 flex flex-col gap-3"], content: view =>
+            {
+                view.Row(["items-center gap-2 flex-wrap"], content: r =>
+                {
+                    r.Text([Text.H3, "tracking-tight text-foreground"], greeting);
+                    r.Badge("Fictional demo data", tone: SemanticTone.Info, size: BadgeSize.Sm);
+                });
+                view.Text([Text.Body, "text-foreground leading-relaxed"], content: s =>
+                {
+                    s.Text("You have ");
+                    s.Text(["font-semibold"], text: Fin.Eur(plan.Balance));
+                    s.Text(" in your account. ");
+                    s.Text(dueBeforePayday > 0 ? $"{Fin.Eur(dueBeforePayday)} of bills and loan payments are due before payday on {Fin.DayLong(plan.Payday)}, which leaves " : $"Nothing else is due before payday on {Fin.DayLong(plan.Payday)}, so you have ");
+                    s.Text(["font-semibold"], text: Fin.Eur(plan.SafeToSpend));
+                    s.Text(plan.SafeToSpend > 0 ? $": about {Fin.Eur(plan.SafeToSpend / days)} a day for {days} day{(days == 1 ? "" : "s")}." : ".");
+                });
+                view.Text([Text.BodySm, "text-muted-foreground"],
+                    $"Your debts total {Fin.Eur(TotalDebt())} and your savings goals hold {Fin.Eur(TotalSaved())}.");
+            });
+
+            // One clear next step
+            view.Box(["lg:col-span-2 rounded-2xl border border-secondary bg-card p-5 sm:p-6 flex flex-col gap-3 shadow-sm"], content: view =>
+            {
+                view.Row(["items-center gap-2"], content: r =>
+                {
+                    IconTile(r, next.Tone switch { "error" => "circle-alert", "warning" => "clock", _ => "circle-check" }, next.Tone, "w-9 h-9");
+                    r.Text([Text.Overline, "text-muted-foreground"], "Your next step");
+                });
+                view.Text([Text.H5, "text-foreground"], next.Title);
+                view.Text([Text.BodySm, "text-muted-foreground"], next.Detail);
+                view.Button([Button.PrimaryMd, "self-start mt-1"], text: next.ButtonText, onClick: () => Go(next.Section));
+            });
         });
 
         // ── Score + payday ──────────────────────────────────────────────────
@@ -34,7 +68,7 @@ public partial class OmabiloApp
                 view.Text([Text.Display, "tabular-nums tracking-tight text-primary-on-brand"], Fin.Eur(safe));
                 view.Text([Text.BodySm, "text-primary-on-brand/90"],
                     safe > 0
-                        ? $"About {Fin.Eur(safe / days)} a day for the next {days} days, after {BillsBeforePayday().Count} bills due before payday."
+                        ? $"About {Fin.Eur(safe / days)} a day for the next {days} days, after bills and loan payments due before payday. Your usual everyday spending is about {Fin.Eur(plan.EverydayPerDay)} a day."
                         : "Bills due before payday are more than your balance. Open the planner to see what to move.");
                 view.Box(["h-px bg-white/20"]);
                 view.Row(["items-center justify-between gap-2 flex-wrap"], content: r =>
@@ -44,8 +78,13 @@ public partial class OmabiloApp
                         c.Text([Text.Caption, "text-primary-on-brand/80"], "Next payday");
                         c.Text([Text.BodyStrong, "text-primary-on-brand"], Fin.DayLong(NextPayday()));
                     });
-                    r.Button(["h-10 px-4 rounded-xl bg-white text-teal-800 font-semibold text-sm hover:bg-white/90 transition-colors"],
-                        text: "Plan my payday", onClick: () => Go("payday"));
+                    r.Row(["gap-2 flex-wrap"], content: rr =>
+                    {
+                        rr.Button(["h-10 px-4 rounded-xl bg-white text-teal-800 font-semibold text-sm hover:bg-white/90 transition-colors"],
+                            text: "Plan my payday", onClick: () => Go("payday"));
+                        rr.Button(["h-10 px-4 rounded-xl border border-white/60 text-primary-on-brand font-semibold text-sm hover:bg-white/10 transition-colors"],
+                            text: "Can I afford it?", onClick: () => Go("payday"));
+                    });
                 });
             });
         });

@@ -42,7 +42,8 @@ public partial class OmabiloApp
             .OrderBy(i => i.DueDate).ToList();
     }
 
-    private decimal SafeToSpend() => CurrentBalance() - BillsBeforePayday().Sum(i => i.Amount ?? 0);
+    // Bills, loan minimums and savings due before payday come off the balance (MoneyPlan.cs)
+    private decimal SafeToSpend() => ComputePaydayPlan().SafeToSpend;
 
     private int DaysToPayday() => Math.Max(1, (int)(NextPayday() - Today).TotalDays);
 

@@ -135,7 +135,7 @@ public sealed class TextInvoiceExtractor : IDocumentExtractor
     private static readonly Regex AmountRx = new(@"(?im)^(?:total|amount due|amount|yhteensä|maksettava|summa)\b[^\d\n]*([\d\s .]+[,.]\d{2})\s*(€|eur)?", RegexOptions.Compiled);
     private static readonly Regex DueRx = new(@"(?im)^(?:due date|due|eräpäivä|erapaiva)\b[^\d\n]*(\d{1,2}[./]\d{1,2}[./]\d{4}|\d{4}-\d{2}-\d{2})", RegexOptions.Compiled);
     private static readonly Regex DateRx = new(@"(?im)^(?:invoice date|date|päiväys|laskun päiväys)\b[^\d\n]*(\d{1,2}[./]\d{1,2}[./]\d{4}|\d{4}-\d{2}-\d{2})", RegexOptions.Compiled);
-    private static readonly Regex NumberRx = new(@"(?im)^(?:invoice (?:no|number|#)|laskun numero|lasku nro)\b\.?[:\s#]*([A-Z0-9][A-Z0-9-]{2,})", RegexOptions.Compiled);
+    private static readonly Regex NumberRx = new(@"(?im)^(?:invoice (?:no|number|#)|laskun numero|lasku nro)\b\.?[:\s#]*(?=[A-Z0-9-]*\d)([A-Z0-9][A-Z0-9-]{2,})", RegexOptions.Compiled);
     private static readonly Regex RefRx = new(@"(?im)^(?:reference|ref|viite|viitenumero)\b\.?[:\s]*((?:RF\d{2}[\s0-9A-Z]{1,30})|[\d ]{4,25})\s*$", RegexOptions.Compiled);
     private static readonly Regex ProviderRx = new(@"(?im)^(?:from|biller|seller|laskuttaja|myyjä)\b[:\s]*(.+)$", RegexOptions.Compiled);
 

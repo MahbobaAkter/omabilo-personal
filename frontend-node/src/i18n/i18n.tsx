@@ -18,6 +18,7 @@ export interface Translations {
   'connection.startupFailed.action': string;
   'auth.welcome.title': string;
   'auth.welcome.subtitle': string;
+  'auth.note': string;
   'auth.divider': string;
   'auth.dismiss': string;
   'auth.email.placeholder': string;
@@ -42,6 +43,21 @@ export interface Translations {
   'auth.sso.placeholder': string;
   'auth.sso.submit': string;
   'auth.sso.submitting': string;
+  'auth.recovery.title': string;
+  'auth.recovery.message': string;
+  'auth.recovery.messageProvider': string;
+  'auth.recovery.return': string;
+  'auth.recovery.returning': string;
+  'auth.recovery.retry': string;
+  'auth.recovery.retryProvider': string;
+  'auth.recovery.retrying': string;
+  'auth.recovery.help': string;
+  'auth.recovery.whatHappened': string;
+  'auth.recovery.code': string;
+  'auth.recovery.nextSteps': string;
+  'auth.recovery.stepRetry': string;
+  'auth.recovery.stepOther': string;
+  'auth.recovery.stepSupport': string;
 }
 
 export type TranslationKey = keyof Translations;

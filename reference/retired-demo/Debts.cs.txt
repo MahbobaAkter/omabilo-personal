@@ -10,8 +10,11 @@ public partial class OmabiloApp
         var minimumOnly = Fin.Simulate(_debts, 0, _strategy.Value);
         var monthlyInterest = active.Sum(d => d.Balance * d.Apr / 100m / 12m);
 
-        SectionHeader(view, "Your debts", "Track every balance and see exactly when you'll be free of them.", actions: a =>
-            a.Button([Button.PrimaryMd], text: "Add debt", icon: "plus", onClick: OpenAddDebt));
+        SectionHeader(view, "Your debts", "Every balance in one place, at your own pace. Each payment you make moves you forward.", actions: a =>
+        {
+            a.Badge("Fictional demo data", tone: SemanticTone.Info, size: BadgeSize.Sm);
+            a.Button([Button.PrimaryMd], text: "Add debt", icon: "plus", onClick: OpenAddDebt);
+        });
 
         view.Grid(["grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4"], content: view =>
         {
@@ -35,6 +38,18 @@ public partial class OmabiloApp
         view.Box([Card.Elevated, "p-5 sm:p-6 flex flex-col gap-5"], content: view =>
         {
             SectionHeader(view, "Payoff plan", "Choose how extra money is used. Minimums are always paid first.");
+
+            // The chosen scenario in one plain sentence
+            if (active.Count > 0)
+            {
+                var sentence = plan.NeverPaysOff
+                    ? "With these payments the interest grows faster than the balance falls. Even a small extra amount each month changes that."
+                    : extra > 0 && !minimumOnly.NeverPaysOff
+                        ? $"Paying {Fin.Eur(extra)} extra each month, you'd be debt-free around {MonthStart(Today).AddMonths(plan.Months).ToString("MMMM yyyy", Fin.Inv)}: " +
+                          $"{Math.Max(0, minimumOnly.Months - plan.Months)} months sooner than minimums alone, and about {Fin.Eur(Math.Max(0, minimumOnly.TotalInterest - plan.TotalInterest))} less interest. This is a projection, not a promise."
+                        : $"Paying the minimums, you'd be debt-free around {MonthStart(Today).AddMonths(plan.Months).ToString("MMMM yyyy", Fin.Inv)}. Try an extra amount below to see how much sooner.";
+                view.Text([Text.Body, "text-foreground"], sentence);
+            }
 
             view.Grid(["grid grid-cols-1 lg:grid-cols-5 gap-6"], content: view =>
             {

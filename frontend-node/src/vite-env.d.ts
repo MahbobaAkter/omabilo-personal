@@ -12,9 +12,9 @@ interface ImportMetaEnv {
   readonly VITE_SERVER_OPEN_BROWSER?: string;
   readonly VITE_SERVER_TUNNELED?: string;
 
-  readonly VITE_IKON_AUTH_METHODS?: string;
-  readonly VITE_IKON_AUTH_REQUIRE_SIGN_IN?: string;
-  readonly VITE_IKON_AUTH_SPACE_ID?: string;
+  readonly VITE_IKON_SPACE_ID?: string;
+  readonly VITE_IKON_SURFACES?: string;
+  readonly VITE_IKON_SURFACE?: string;
 
   readonly VITE_WAIT_FOR_EXTERNAL_CONNECT_URL?: string;
 
